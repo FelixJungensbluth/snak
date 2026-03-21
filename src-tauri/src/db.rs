@@ -84,6 +84,67 @@ pub fn index_message(
     Ok(())
 }
 
+/// A row from the nodes table.
+pub struct NodeRow {
+    pub id: String,
+    pub node_type: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+    pub order_idx: i64,
+    pub is_archived: bool,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub last_message: Option<String>,
+}
+
+/// List all non-archived nodes ordered by parent_id / order_idx.
+pub fn list_nodes(conn: &Connection) -> Result<Vec<NodeRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, type, name, parent_id, order_idx, is_archived, provider, model, last_message
+         FROM nodes
+         WHERE is_archived = 0
+         ORDER BY parent_id NULLS FIRST, order_idx ASC, name ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(NodeRow {
+            id: row.get(0)?,
+            node_type: row.get(1)?,
+            name: row.get(2)?,
+            parent_id: row.get(3)?,
+            order_idx: row.get(4)?,
+            is_archived: row.get::<_, i64>(5)? != 0,
+            provider: row.get(6)?,
+            model: row.get(7)?,
+            last_message: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Rename a node and update its updated_at timestamp.
+pub fn rename_node(conn: &Connection, id: &str, new_name: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE nodes SET name = ?1, updated_at = strftime('%s','now') * 1000 WHERE id = ?2",
+        params![new_name, id],
+    )?;
+    Ok(())
+}
+
+/// Archive a node (set is_archived = 1).
+pub fn archive_node(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE nodes SET is_archived = 1, updated_at = strftime('%s','now') * 1000 WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(())
+}
+
+/// Delete a node row. Due to ON DELETE CASCADE, child nodes are also removed.
+pub fn delete_node(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM nodes WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
 pub struct FtsResult {
     pub chat_id: String,
     pub msg_id: String,
