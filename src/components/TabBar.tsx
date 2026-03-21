@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { X, MessageSquare } from "lucide-react";
 import { useTabStore } from "../stores/tabStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
@@ -12,6 +13,13 @@ export default function TabBar({ paneId }: TabBarProps) {
   const closeTab = useTabStore((s) => s.closeTab);
   const nodes = useWorkspaceStore((s) => s.nodes);
 
+  // O(1) lookup instead of O(n) find per tab
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, (typeof nodes)[number]>();
+    for (const n of nodes) map.set(n.id, n);
+    return map;
+  }, [nodes]);
+
   const chatIds = paneTabs?.chatIds ?? [];
   const activeChatId = paneTabs?.activeChatId ?? null;
 
@@ -20,7 +28,7 @@ export default function TabBar({ paneId }: TabBarProps) {
   return (
     <div className="flex items-end bg-surface border-b border-border h-[35px] overflow-x-auto">
       {chatIds.map((chatId) => {
-        const node = nodes.find((n) => n.id === chatId);
+        const node = nodeMap.get(chatId);
         const name = node?.name ?? "Untitled";
         const isActive = chatId === activeChatId;
 
@@ -37,7 +45,7 @@ export default function TabBar({ paneId }: TabBarProps) {
             <MessageSquare size={12} className="text-icon-chat shrink-0" />
             <span className="truncate">{name}</span>
             <button
-              className="ml-auto shrink-0 rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-surface-hover transition-opacity"
+              className="ml-auto shrink-0 rounded p-0.5 text-transparent group-hover:text-fg-muted hover:text-fg hover:bg-surface-hover transition-colors w-4 h-4 flex items-center justify-center"
               onClick={(e) => {
                 e.stopPropagation();
                 closeTab(paneId, chatId);

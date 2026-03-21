@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Send } from "lucide-react";
 import { useChatStore, type Chat, type Message } from "../stores/chatStore";
@@ -168,7 +168,7 @@ export default function ChatView({ chatId }: ChatViewProps) {
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+const MessageBubble = memo(function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
 
@@ -189,4 +189,4 @@ function MessageBubble({ message }: { message: Message }) {
       </div>
     </div>
   );
-}
+});

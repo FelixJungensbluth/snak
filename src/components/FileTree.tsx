@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ChevronRight,
@@ -13,7 +13,31 @@ import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore"
 import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
 
-// ── Public entry-point ────────────────────────────────────────────────────────
+// ── Pre-indexed tree entry-point ─────────────────────────────────────────────
+
+/** Map from parentId (null for root) to sorted children */
+type ChildIndex = Map<string | null, WorkspaceNode[]>;
+
+function buildChildIndex(nodes: WorkspaceNode[]): ChildIndex {
+  const index: ChildIndex = new Map();
+  for (const node of nodes) {
+    const key = node.parent_id;
+    let list = index.get(key);
+    if (!list) {
+      list = [];
+      index.set(key, list);
+    }
+    list.push(node);
+  }
+  // Sort each group: folders first, then alphabetical
+  for (const children of index.values()) {
+    children.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+  return index;
+}
 
 interface FileTreeProps {
   nodes: WorkspaceNode[];
@@ -22,19 +46,28 @@ interface FileTreeProps {
 }
 
 export default function FileTree({ nodes, parentId, depth = 0 }: FileTreeProps) {
-  const children = nodes
-    .filter((n) => n.parent_id === parentId)
-    .sort((a, b) => {
-      if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+  // Build index once per nodes change — O(n) instead of O(n²) recursive filtering
+  const childIndex = useMemo(() => buildChildIndex(nodes), [nodes]);
 
-  if (children.length === 0) return null;
+  return <FileTreeLevel childIndex={childIndex} parentId={parentId} depth={depth} />;
+}
+
+function FileTreeLevel({
+  childIndex,
+  parentId,
+  depth,
+}: {
+  childIndex: ChildIndex;
+  parentId: string | null;
+  depth: number;
+}) {
+  const children = childIndex.get(parentId);
+  if (!children || children.length === 0) return null;
 
   return (
     <ul className="list-none">
       {children.map((node) => (
-        <FileTreeNode key={node.id} node={node} allNodes={nodes} depth={depth} />
+        <FileTreeNode key={node.id} node={node} childIndex={childIndex} depth={depth} />
       ))}
     </ul>
   );
@@ -44,11 +77,11 @@ export default function FileTree({ nodes, parentId, depth = 0 }: FileTreeProps) 
 
 function FileTreeNode({
   node,
-  allNodes,
+  childIndex,
   depth,
 }: {
   node: WorkspaceNode;
-  allNodes: WorkspaceNode[];
+  childIndex: ChildIndex;
   depth: number;
 }) {
   const isFolder = node.type === "folder";
@@ -191,7 +224,7 @@ function FileTreeNode({
 
       {/* children */}
       {isFolder && expanded && (
-        <FileTree nodes={allNodes} parentId={node.id} depth={depth + 1} />
+        <FileTreeLevel childIndex={childIndex} parentId={node.id} depth={depth + 1} />
       )}
 
       {/* context menu */}
