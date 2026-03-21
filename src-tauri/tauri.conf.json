@@ -1,20 +1,20 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "snak-init",
+  "productName": "snak",
   "version": "0.1.0",
-  "identifier": "com.felix.snak-init",
+  "identifier": "com.felix.snak",
   "build": {
-    "beforeDevCommand": "bun run dev",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
-        "title": "snak-init",
-        "width": 800,
-        "height": 600
+        "title": "Snak",
+        "width": 1280,
+        "height": 800
       }
     ],
     "security": {
@@ -31,5 +31,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "sql": {},
+    "store": {}
   }
 }
