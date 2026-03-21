@@ -14,10 +14,11 @@ use commands::workspace::{
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(DbState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
+            // workspace / database
             open_workspace,
             db_health,
             insert_node,
@@ -31,6 +32,7 @@ pub fn run() {
             delete_node,
             get_saved_workspace,
             save_workspace,
+            // api keys
             set_api_key,
             get_api_key,
             delete_api_key,

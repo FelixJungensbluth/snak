@@ -65,6 +65,7 @@ pub fn get_saved_workspace(app: tauri::AppHandle) -> Result<Option<String>, Stri
 #[derive(Debug, serde::Serialize)]
 pub struct NodeResponse {
     pub id: String,
+    #[serde(rename = "type")]
     pub node_type: String,
     pub name: String,
     pub parent_id: Option<String>,
@@ -98,6 +99,8 @@ pub fn list_nodes(state: State<'_, DbState>) -> Result<Vec<NodeResponse>, String
         })
         .map_err(|e| e.to_string())
 }
+
+// ── Low-level insert ─────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize)]
 pub struct InsertNodePayload {
@@ -263,7 +266,6 @@ pub fn create_folder(
 // ── Rename / Archive / Delete ─────────────────────────────────────────────────
 
 /// Rename a node: updates only the SQLite display name.
-/// On-disk names use the node id, so no filesystem rename is needed.
 #[tauri::command]
 pub fn rename_node(id: String, new_name: String, state: State<'_, DbState>) -> Result<(), String> {
     let guard = state.0.lock().unwrap();

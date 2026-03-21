@@ -6,8 +6,8 @@ export const Route = createFileRoute("/")({
 
 function WorkspaceHome() {
   return (
-    <div className="flex flex-1 items-center justify-center text-zinc-600 text-sm select-none">
-      <p>Select a chat from the sidebar or create a new one.</p>
+    <div className="flex items-center justify-center h-full">
+      <p className="text-xs text-fg-dim">Select or create a chat</p>
     </div>
   );
 }
