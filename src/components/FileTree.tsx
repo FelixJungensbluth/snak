@@ -10,6 +10,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
+import { useTabStore } from "../stores/tabStore";
+import { usePaneStore } from "../stores/paneStore";
 
 // ── Public entry-point ────────────────────────────────────────────────────────
 
@@ -60,6 +62,8 @@ function FileTreeNode({
   const ctxMenuRef = useRef<HTMLDivElement>(null);
 
   const { rootPath, upsertNode, removeNode } = useWorkspaceStore();
+  const openTab = useTabStore((s) => s.openTab);
+  const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
 
   useEffect(() => {
     if (renaming) {
@@ -134,7 +138,13 @@ function FileTreeNode({
       <div
         className="flex items-center h-[22px] cursor-pointer hover:bg-surface-hover select-none group"
         style={{ paddingLeft: `${pl}px` }}
-        onClick={() => isFolder && setExpanded((p) => !p)}
+        onClick={() => {
+          if (isFolder) {
+            setExpanded((p) => !p);
+          } else {
+            openTab(focusedPaneId, node.id);
+          }
+        }}
         onDoubleClick={startRename}
         onContextMenu={(e) => {
           e.preventDefault();

@@ -329,6 +329,158 @@ pub fn delete_node(
     db::delete_node(conn, &id).map_err(|e| e.to_string())
 }
 
+// ── Read chat file ──────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize)]
+pub struct ChatFileMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ChatFileResponse {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub model: String,
+    pub messages: Vec<ChatFileMessage>,
+}
+
+/// Read a chat `.md` file and parse its YAML frontmatter + message blocks.
+///
+/// Message format in the file:
+/// ```
+/// ## user
+/// message content
+///
+/// ## assistant
+/// message content
+/// ```
+#[tauri::command]
+pub fn read_chat_file(
+    workspace_root: String,
+    chat_id: String,
+    state: State<'_, DbState>,
+) -> Result<ChatFileResponse, String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+
+    // Find parent_id to resolve the directory
+    let parent_id: Option<String> = conn
+        .query_row(
+            "SELECT parent_id FROM nodes WHERE id = ?1",
+            rusqlite::params![chat_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let dir = node_dir_for_parent(&workspace_root, parent_id.as_deref(), conn)?;
+    let file_path = dir.join(format!("{chat_id}.md"));
+    let raw = fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
+
+    // Parse YAML frontmatter between --- delimiters
+    let mut id = String::new();
+    let mut name = String::new();
+    let mut provider = String::new();
+    let mut model = String::new();
+    let mut body = raw.as_str();
+
+    if raw.starts_with("---") {
+        if let Some(end) = raw[3..].find("---") {
+            let fm = &raw[3..3 + end];
+            body = &raw[3 + end + 3..];
+            for line in fm.lines() {
+                let line = line.trim();
+                if let Some(val) = line.strip_prefix("id:") {
+                    id = val.trim().to_string();
+                } else if let Some(val) = line.strip_prefix("name:") {
+                    name = val.trim().to_string();
+                } else if let Some(val) = line.strip_prefix("provider:") {
+                    provider = val.trim().to_string();
+                } else if let Some(val) = line.strip_prefix("model:") {
+                    model = val.trim().to_string();
+                }
+            }
+        }
+    }
+
+    // Parse message blocks: lines starting with "## user" or "## assistant"
+    let mut messages: Vec<ChatFileMessage> = Vec::new();
+    let mut current_role: Option<String> = None;
+    let mut current_content = String::new();
+
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed == "## user" || trimmed == "## assistant" || trimmed == "## system" {
+            // Flush previous message
+            if let Some(role) = current_role.take() {
+                let content = current_content.trim().to_string();
+                if !content.is_empty() {
+                    messages.push(ChatFileMessage { role, content });
+                }
+            }
+            current_role = Some(trimmed[3..].to_string());
+            current_content.clear();
+        } else if current_role.is_some() {
+            current_content.push_str(line);
+            current_content.push('\n');
+        }
+    }
+    // Flush last message
+    if let Some(role) = current_role {
+        let content = current_content.trim().to_string();
+        if !content.is_empty() {
+            messages.push(ChatFileMessage { role, content });
+        }
+    }
+
+    if id.is_empty() {
+        id = chat_id;
+    }
+
+    Ok(ChatFileResponse {
+        id,
+        name,
+        provider,
+        model,
+        messages,
+    })
+}
+
+/// Append a message block to the chat `.md` file on disk.
+#[tauri::command]
+pub fn append_message_to_file(
+    workspace_root: String,
+    chat_id: String,
+    role: String,
+    content: String,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+
+    let parent_id: Option<String> = conn
+        .query_row(
+            "SELECT parent_id FROM nodes WHERE id = ?1",
+            rusqlite::params![chat_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let dir = node_dir_for_parent(&workspace_root, parent_id.as_deref(), conn)?;
+    let file_path = dir.join(format!("{chat_id}.md"));
+
+    use std::io::Write;
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(&file_path)
+        .map_err(|e| e.to_string())?;
+
+    write!(file, "\n## {role}\n{content}\n").map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 // ── FTS ──────────────────────────────────────────────────────────────────────
 
 /// Index a message in the FTS table.
