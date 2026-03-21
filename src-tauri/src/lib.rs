@@ -5,9 +5,9 @@ pub mod db;
 
 use commands::keys::{delete_api_key, get_api_key, set_api_key};
 use commands::workspace::{
-    archive_node, create_chat, create_folder, db_health, delete_node, get_saved_workspace,
-    index_message, insert_node, list_nodes, open_workspace, rename_node, save_workspace,
-    search_messages, DbState,
+    append_message_to_file, archive_node, create_chat, create_folder, db_health, delete_node,
+    get_saved_workspace, index_message, insert_node, list_nodes, open_workspace, read_chat_file,
+    rename_node, save_workspace, search_messages, DbState,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -30,6 +30,8 @@ pub fn run() {
             rename_node,
             archive_node,
             delete_node,
+            read_chat_file,
+            append_message_to_file,
             get_saved_workspace,
             save_workspace,
             // api keys
