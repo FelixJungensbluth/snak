@@ -1,9 +1,18 @@
+use std::fs;
+use std::path::Path;
 use std::sync::Mutex;
 use tauri::State;
+use tauri_plugin_store::StoreExt;
+use uuid::Uuid;
 
 use crate::db;
 
 pub struct DbState(pub Mutex<Option<rusqlite::Connection>>);
+
+const WORKSPACE_STORE: &str = "workspace.bin";
+const WORKSPACE_PATH_KEY: &str = "workspace_path";
+
+// ── Health / open ────────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Serialize)]
 pub struct DbHealthResponse {
@@ -13,10 +22,7 @@ pub struct DbHealthResponse {
 
 /// Open (or create) the workspace database at `db_path` and run schema migrations.
 #[tauri::command]
-pub fn open_workspace(
-    db_path: String,
-    state: State<'_, DbState>,
-) -> Result<(), String> {
+pub fn open_workspace(db_path: String, state: State<'_, DbState>) -> Result<(), String> {
     let conn = db::open_workspace_db(&db_path).map_err(|e| e.to_string())?;
     let mut guard = state.0.lock().unwrap();
     *guard = Some(conn);
@@ -31,10 +37,66 @@ pub fn db_health(state: State<'_, DbState>) -> Result<DbHealthResponse, String> 
     let node_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM nodes", [], |row| row.get(0))
         .map_err(|e| e.to_string())?;
-    Ok(DbHealthResponse {
-        ok: true,
-        node_count,
-    })
+    Ok(DbHealthResponse { ok: true, node_count })
+}
+
+// ── Workspace path persistence ───────────────────────────────────────────────
+
+/// Persist the workspace root path to the store so it survives relaunches.
+#[tauri::command]
+pub fn save_workspace(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let store = app.store(WORKSPACE_STORE).map_err(|e| e.to_string())?;
+    store.set(WORKSPACE_PATH_KEY, serde_json::Value::String(path));
+    store.save().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Retrieve the previously-saved workspace path. Returns `None` on first launch.
+#[tauri::command]
+pub fn get_saved_workspace(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let store = app.store(WORKSPACE_STORE).map_err(|e| e.to_string())?;
+    Ok(store
+        .get(WORKSPACE_PATH_KEY)
+        .and_then(|v| v.as_str().map(|s| s.to_string())))
+}
+
+// ── Node CRUD ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize)]
+pub struct NodeResponse {
+    pub id: String,
+    pub node_type: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+    pub order_idx: i64,
+    pub is_archived: bool,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub last_message: Option<String>,
+}
+
+/// List all non-archived nodes from the workspace.
+#[tauri::command]
+pub fn list_nodes(state: State<'_, DbState>) -> Result<Vec<NodeResponse>, String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+    db::list_nodes(conn)
+        .map(|rows| {
+            rows.into_iter()
+                .map(|r| NodeResponse {
+                    id: r.id,
+                    node_type: r.node_type,
+                    name: r.name,
+                    parent_id: r.parent_id,
+                    order_idx: r.order_idx,
+                    is_archived: r.is_archived,
+                    provider: r.provider,
+                    model: r.model,
+                    last_message: r.last_message,
+                })
+                .collect()
+        })
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -48,7 +110,7 @@ pub struct InsertNodePayload {
     pub model: Option<String>,
 }
 
-/// Insert a node (chat or folder) into the workspace database.
+/// Low-level insert a node row (used by integration tests / direct callers).
 #[tauri::command]
 pub fn insert_node(
     payload: InsertNodePayload,
@@ -68,6 +130,204 @@ pub fn insert_node(
     )
     .map_err(|e| e.to_string())
 }
+
+// ── High-level create helpers ────────────────────────────────────────────────
+
+/// Resolve the directory on disk that should contain children of `parent_id`.
+fn node_dir_for_parent(
+    workspace_root: &str,
+    parent_id: Option<&str>,
+    conn: &rusqlite::Connection,
+) -> Result<std::path::PathBuf, String> {
+    match parent_id {
+        None => Ok(Path::new(workspace_root).to_path_buf()),
+        Some(pid) => {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM nodes WHERE id = ?1 AND type = 'folder'",
+                    rusqlite::params![pid],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .map_err(|e| e.to_string())?;
+            if !exists {
+                return Err(format!("Parent folder '{pid}' not found"));
+            }
+            Ok(Path::new(workspace_root).join(pid))
+        }
+    }
+}
+
+/// Create a new chat: writes a `.md` file with YAML frontmatter and inserts a node row.
+#[tauri::command]
+pub fn create_chat(
+    workspace_root: String,
+    parent_id: Option<String>,
+    name: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    state: State<'_, DbState>,
+) -> Result<NodeResponse, String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+
+    let id = Uuid::new_v4().to_string();
+    let display_name = name.unwrap_or_else(|| "New Chat".to_string());
+    let provider_str = provider.as_deref().unwrap_or("anthropic").to_string();
+    let model_str = model.as_deref().unwrap_or("claude-sonnet-4-6").to_string();
+
+    let dir = node_dir_for_parent(&workspace_root, parent_id.as_deref(), conn)?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let order_idx: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(order_idx), -1) + 1 FROM nodes WHERE parent_id IS ?1",
+            rusqlite::params![parent_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let file_path = dir.join(format!("{id}.md"));
+    let frontmatter = format!(
+        "---\nid: {id}\nname: {display_name}\nprovider: {provider_str}\nmodel: {model_str}\n---\n"
+    );
+    fs::write(&file_path, frontmatter).map_err(|e| e.to_string())?;
+
+    db::insert_node(
+        conn,
+        &id,
+        "chat",
+        &display_name,
+        parent_id.as_deref(),
+        order_idx,
+        Some(&provider_str),
+        Some(&model_str),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(NodeResponse {
+        id,
+        node_type: "chat".to_string(),
+        name: display_name,
+        parent_id,
+        order_idx,
+        is_archived: false,
+        provider: Some(provider_str),
+        model: Some(model_str),
+        last_message: None,
+    })
+}
+
+/// Create a new folder: makes a directory on disk and inserts a node row.
+#[tauri::command]
+pub fn create_folder(
+    workspace_root: String,
+    parent_id: Option<String>,
+    name: Option<String>,
+    state: State<'_, DbState>,
+) -> Result<NodeResponse, String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+
+    let id = Uuid::new_v4().to_string();
+    let display_name = name.unwrap_or_else(|| "New Folder".to_string());
+
+    let parent_dir = node_dir_for_parent(&workspace_root, parent_id.as_deref(), conn)?;
+    let dir_path = parent_dir.join(&id);
+    fs::create_dir_all(&dir_path).map_err(|e| e.to_string())?;
+
+    let order_idx: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(order_idx), -1) + 1 FROM nodes WHERE parent_id IS ?1",
+            rusqlite::params![parent_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    db::insert_node(conn, &id, "folder", &display_name, parent_id.as_deref(), order_idx, None, None)
+        .map_err(|e| e.to_string())?;
+
+    Ok(NodeResponse {
+        id,
+        node_type: "folder".to_string(),
+        name: display_name,
+        parent_id,
+        order_idx,
+        is_archived: false,
+        provider: None,
+        model: None,
+        last_message: None,
+    })
+}
+
+// ── Rename / Archive / Delete ─────────────────────────────────────────────────
+
+/// Rename a node: updates only the SQLite display name.
+/// On-disk names use the node id, so no filesystem rename is needed.
+#[tauri::command]
+pub fn rename_node(id: String, new_name: String, state: State<'_, DbState>) -> Result<(), String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+    db::rename_node(conn, &id, &new_name).map_err(|e| e.to_string())
+}
+
+/// Archive a node (hidden from the tree; data is kept on disk).
+#[tauri::command]
+pub fn archive_node(id: String, state: State<'_, DbState>) -> Result<(), String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+    db::archive_node(conn, &id).map_err(|e| e.to_string())
+}
+
+/// Delete a node: removes the file/folder from disk then deletes the DB row.
+/// Child nodes are cascaded by SQLite ON DELETE CASCADE.
+#[tauri::command]
+pub fn delete_node(
+    workspace_root: String,
+    id: String,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+
+    let node_type: String = conn
+        .query_row(
+            "SELECT type FROM nodes WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let parent_id: Option<String> = conn
+        .query_row(
+            "SELECT parent_id FROM nodes WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let dir = node_dir_for_parent(&workspace_root, parent_id.as_deref(), conn)?;
+
+    match node_type.as_str() {
+        "chat" => {
+            let file = dir.join(format!("{id}.md"));
+            if file.exists() {
+                fs::remove_file(&file).map_err(|e| e.to_string())?;
+            }
+        }
+        "folder" => {
+            let folder = dir.join(&id);
+            if folder.exists() {
+                fs::remove_dir_all(&folder).map_err(|e| e.to_string())?;
+            }
+        }
+        _ => {}
+    }
+
+    db::delete_node(conn, &id).map_err(|e| e.to_string())
+}
+
+// ── FTS ──────────────────────────────────────────────────────────────────────
 
 /// Index a message in the FTS table.
 #[tauri::command]
