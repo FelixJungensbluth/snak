@@ -1,158 +1,159 @@
-import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { FolderOpen, KeyRound, ArrowRight, SkipForward } from "lucide-react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import type { WorkspaceNode } from "../stores/workspaceStore";
 
-type Step = "workspace" | "apiKey";
+type Step = "pick" | "apikey";
 
-interface OnboardingProps {
-  onComplete: () => void;
-}
-
-export function Onboarding({ onComplete }: OnboardingProps) {
-  const [step, setStep] = useState<Step>("workspace");
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+export default function Onboarding() {
+  const [step, setStep] = useState<Step>("pick");
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [provider, setProvider] = useState("anthropic");
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const setRootPath = useWorkspaceStore((s) => s.setRootPath);
-  const setProviderConfig = useSettingsStore((s) => s.setProviderConfig);
+  const { setRootPath, setNodes } = useWorkspaceStore();
+  const { setProviderConfig } = useSettingsStore();
 
-  async function pickWorkspace() {
+  async function handlePickFolder() {
+    setError(null);
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || typeof dir !== "string") return;
+    setPendingPath(dir);
+  }
+
+  async function handleConfirmWorkspace() {
+    if (!pendingPath) return;
+    setLoading(true);
+    setError(null);
     try {
-      const result = await open({ directory: true, multiple: false, title: "Choose Workspace Folder" });
-      if (typeof result === "string") {
-        setSelectedPath(result);
-        setError(null);
+      await invoke("save_workspace", { path: pendingPath });
+      await invoke("open_workspace", { dbPath: pendingPath + "/snak.db" });
+      const nodes = await invoke<WorkspaceNode[]>("list_nodes");
+      setNodes(nodes);
+      setStep("apikey");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSaveApiKey() {
+    setLoading(true);
+    setError(null);
+    try {
+      if (apiKey.trim()) {
+        await invoke("set_api_key", { provider, apiKey: apiKey.trim() });
+        setProviderConfig(provider, { hasApiKey: true });
       }
+      setRootPath(pendingPath!);
     } catch (e) {
       setError(String(e));
-    }
-  }
-
-  async function confirmWorkspace() {
-    if (!selectedPath) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const dbPath = `${selectedPath}/snak.db`;
-      await invoke("open_workspace", { dbPath });
-      await invoke("save_workspace", { path: selectedPath });
-      setRootPath(selectedPath);
-      setStep("apiKey");
-    } catch (e) {
-      setError(String(e));
-    } finally {
       setLoading(false);
     }
   }
 
-  async function saveApiKey() {
-    if (!apiKey.trim()) return;
-    setLoading(true);
-    setError(null);
-    try {
-      await invoke("set_api_key", { provider, apiKey: apiKey.trim() });
-      setProviderConfig(provider, { hasApiKey: true });
-      onComplete();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
+  if (step === "pick") {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen gap-6">
+        <div className="text-center space-y-1.5">
+          <h1 className="text-lg font-medium text-fg">Open a workspace</h1>
+          <p className="text-xs text-fg-muted">
+            Choose a folder to store your chats.
+          </p>
+        </div>
+
+        <div className="w-72 space-y-2">
+          <button
+            onClick={handlePickFolder}
+            className="w-full py-2 px-3 bg-surface-raised hover:bg-surface-hover border border-border-strong rounded text-left flex items-center gap-2.5 transition-colors cursor-pointer text-xs"
+          >
+            <FolderOpen size={14} className="text-fg-muted flex-shrink-0" />
+            <span className={pendingPath ? "text-fg truncate" : "text-fg-muted"}>
+              {pendingPath ?? "Select folder…"}
+            </span>
+          </button>
+
+          {error && (
+            <p className="text-[11px] text-fg-error px-1">{error}</p>
+          )}
+
+          <button
+            onClick={handleConfirmWorkspace}
+            disabled={!pendingPath || loading}
+            className="w-full py-1.5 px-3 bg-accent hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed rounded text-xs font-medium text-white transition-colors flex items-center justify-center gap-1.5"
+          >
+            {loading ? "Opening…" : "Continue"}
+            {!loading && <ArrowRight size={12} />}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-zinc-950 text-zinc-100">
-      <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-900 p-8 shadow-xl">
-        {step === "workspace" && (
-          <>
-            <h1 className="mb-2 text-2xl font-semibold">Welcome to Snak</h1>
-            <p className="mb-6 text-sm text-zinc-400">
-              Choose a folder on your machine where your chats will be stored.
-            </p>
+    <div className="flex flex-col items-center justify-center h-screen gap-6">
+      <div className="text-center space-y-1.5">
+        <h1 className="text-lg font-medium text-fg">Add an API key</h1>
+        <p className="text-xs text-fg-muted">
+          Optional — you can add keys later in settings.
+        </p>
+      </div>
 
-            <button
-              onClick={pickWorkspace}
-              className="mb-4 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-3 text-left text-sm hover:bg-zinc-700 active:bg-zinc-600 transition-colors"
-            >
-              {selectedPath ? (
-                <span className="font-mono text-xs text-zinc-300 break-all">{selectedPath}</span>
-              ) : (
-                <span className="text-zinc-400">Click to choose workspace folder…</span>
-              )}
-            </button>
+      <div className="w-72 space-y-3">
+        <div>
+          <label className="block text-[11px] text-fg-muted mb-1">Provider</label>
+          <select
+            value={provider}
+            onChange={(e) => setProvider(e.target.value)}
+            className="w-full py-1.5 px-2.5 bg-surface-raised border border-border-strong rounded text-xs text-fg outline-none focus:border-accent"
+          >
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
+            <option value="openrouter">OpenRouter</option>
+          </select>
+        </div>
 
-            {error && <p className="mb-4 text-sm text-red-400">{error}</p>}
-
-            <button
-              onClick={confirmWorkspace}
-              disabled={!selectedPath || loading}
-              className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              {loading ? "Opening…" : "Continue"}
-            </button>
-          </>
-        )}
-
-        {step === "apiKey" && (
-          <>
-            <h1 className="mb-2 text-2xl font-semibold">Add an API Key</h1>
-            <p className="mb-6 text-sm text-zinc-400">
-              Enter your first provider API key. You can add more later in Settings.
-            </p>
-
-            <label className="mb-1 block text-xs text-zinc-400 uppercase tracking-wider">Provider</label>
-            <select
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-              className="mb-4 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
-              <option value="openrouter">OpenRouter</option>
-            </select>
-
-            <label className="mb-1 block text-xs text-zinc-400 uppercase tracking-wider">API Key</label>
+        <div>
+          <label className="block text-[11px] text-fg-muted mb-1">Key</label>
+          <div className="relative">
+            <KeyRound size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-muted" />
             <input
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && saveApiKey()}
+              onKeyDown={(e) => e.key === "Enter" && handleSaveApiKey()}
               placeholder="sk-…"
-              className="mb-4 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full py-1.5 pl-7 pr-2.5 bg-surface-raised border border-border-strong rounded text-xs text-fg placeholder-fg-dim outline-none focus:border-accent"
             />
+          </div>
+        </div>
 
-            {error && <p className="mb-4 text-sm text-red-400">{error}</p>}
-
-            <div className="flex gap-2">
-              <button
-                onClick={onComplete}
-                className="flex-1 rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800 transition-colors"
-              >
-                Skip for now
-              </button>
-              <button
-                onClick={saveApiKey}
-                disabled={!apiKey.trim() || loading}
-                className="flex-1 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                {loading ? "Saving…" : "Save & Continue"}
-              </button>
-            </div>
-          </>
+        {error && (
+          <p className="text-[11px] text-fg-error px-1">{error}</p>
         )}
 
-        <div className="mt-6 flex justify-center gap-2">
-          {(["workspace", "apiKey"] as Step[]).map((s) => (
-            <div
-              key={s}
-              className={`h-1.5 w-6 rounded-full transition-colors ${step === s ? "bg-indigo-500" : "bg-zinc-700"}`}
-            />
-          ))}
+        <div className="flex gap-2 pt-0.5">
+          <button
+            onClick={() => setRootPath(pendingPath!)}
+            className="flex-1 py-1.5 px-3 bg-surface-raised hover:bg-surface-hover border border-border-strong rounded text-xs text-fg-muted transition-colors flex items-center justify-center gap-1"
+          >
+            <SkipForward size={11} />
+            Skip
+          </button>
+          <button
+            onClick={handleSaveApiKey}
+            disabled={loading}
+            className="flex-1 py-1.5 px-3 bg-accent hover:bg-accent-hover disabled:opacity-40 rounded text-xs font-medium text-white transition-colors flex items-center justify-center gap-1.5"
+          >
+            {loading ? "Saving…" : "Save"}
+            {!loading && <ArrowRight size={12} />}
+          </button>
         </div>
       </div>
     </div>

@@ -1,5 +1,17 @@
 use rusqlite::{Connection, Result, params};
 
+pub struct NodeRow {
+    pub id: String,
+    pub node_type: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+    pub order_idx: i64,
+    pub is_archived: bool,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub last_message: Option<String>,
+}
+
 /// Run all schema migrations on the given connection.
 /// Safe to call multiple times (idempotent via IF NOT EXISTS).
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -41,7 +53,7 @@ pub fn open_workspace_db(db_path: &str) -> Result<Connection> {
     Ok(conn)
 }
 
-/// Insert a node into the nodes table. Returns the row's rowid.
+/// Insert a node into the nodes table.
 pub fn insert_node(
     conn: &Connection,
     id: &str,
@@ -82,19 +94,6 @@ pub fn index_message(
         params![content, chat_id, msg_id],
     )?;
     Ok(())
-}
-
-/// A row from the nodes table.
-pub struct NodeRow {
-    pub id: String,
-    pub node_type: String,
-    pub name: String,
-    pub parent_id: Option<String>,
-    pub order_idx: i64,
-    pub is_archived: bool,
-    pub provider: Option<String>,
-    pub model: Option<String>,
-    pub last_message: Option<String>,
 }
 
 /// List all non-archived nodes ordered by parent_id / order_idx.
@@ -281,16 +280,13 @@ mod tests {
         index_message(&conn, "Rust makes systems programming safe and fast", "chat-fts", "msg-3")
             .expect("index msg 3");
 
-        // Porter stemmer: "jumping" -> "jump", matches "jumps"
         let results = search_messages(&conn, "jump", 10).expect("search");
         assert!(!results.is_empty(), "expected FTS results for 'jump'");
         assert_eq!(results[0].msg_id, "msg-1");
 
-        // Search for "lazy" — should match both msg-1 ("lazy") and msg-2 ("Laziness" stems to "lazi")
         let lazy_results = search_messages(&conn, "lazy", 10).expect("search lazy");
         assert!(lazy_results.len() >= 1, "expected results for 'lazy'");
 
-        // Search for something that doesn't exist
         let none = search_messages(&conn, "zzzyyyxxx", 10).expect("search none");
         assert!(none.is_empty());
     }

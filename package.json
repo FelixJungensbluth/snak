@@ -21,6 +21,7 @@
     "@tauri-apps/plugin-store": "^2",
     "effect": "^3.21.0",
     "immer": "^10",
+    "lucide-react": "^0.577.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "zustand": "^5"
