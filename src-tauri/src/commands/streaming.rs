@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use futures::StreamExt;
 use reqwest::Client;
@@ -12,6 +12,11 @@ use tokio_util::sync::CancellationToken;
 
 /// Holds a cancellation token per chat so callers can abort in-flight streams.
 pub struct StreamState(pub Mutex<HashMap<String, CancellationToken>>);
+
+fn http_client() -> &'static Client {
+    static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+    HTTP_CLIENT.get_or_init(Client::new)
+}
 
 // ── Shared types ─────────────────────────────────────────────────────────────
 
@@ -180,27 +185,47 @@ pub async fn stream_chat(
     tauri::async_runtime::spawn(async move {
         let result = match provider.as_str() {
             "ollama" => {
-                let url = base_url
-                    .as_deref()
-                    .unwrap_or("http://localhost:11434");
+                let url = base_url.as_deref().unwrap_or("http://localhost:11434");
                 stream_ollama(
-                    &app, &chat_id, &cancel, url, &model, messages,
-                    system_prompt, temperature, max_tokens,
+                    &app,
+                    &chat_id,
+                    &cancel,
+                    url,
+                    &model,
+                    messages,
+                    system_prompt,
+                    temperature,
+                    max_tokens,
                 )
                 .await
             }
             "openai" | "openrouter" => {
                 stream_openai(
-                    &app, &chat_id, &cancel, &api_key, &provider, &model,
-                    messages, system_prompt, temperature, max_tokens,
+                    &app,
+                    &chat_id,
+                    &cancel,
+                    &api_key,
+                    &provider,
+                    &model,
+                    messages,
+                    system_prompt,
+                    temperature,
+                    max_tokens,
                 )
                 .await
             }
             _ => {
                 // Default: Anthropic
                 stream_anthropic(
-                    &app, &chat_id, &cancel, &api_key, &model, messages,
-                    system_prompt, temperature, max_tokens,
+                    &app,
+                    &chat_id,
+                    &cancel,
+                    &api_key,
+                    &model,
+                    messages,
+                    system_prompt,
+                    temperature,
+                    max_tokens,
                 )
                 .await
             }
@@ -244,10 +269,7 @@ pub struct AutoTitleInput {
 /// Generate a short title (3–5 words) for a chat based on its messages.
 /// Returns the title string. Failures return Err (caller should treat silently).
 #[tauri::command]
-pub async fn auto_title_chat(
-    app: AppHandle,
-    input: AutoTitleInput,
-) -> Result<String, String> {
+pub async fn auto_title_chat(app: AppHandle, input: AutoTitleInput) -> Result<String, String> {
     let api_key = if input.provider != "ollama" {
         let store = app.store("keys.bin").map_err(|e| e.to_string())?;
         let key_name = format!("api_key:{}", input.provider);
@@ -264,24 +286,39 @@ pub async fn auto_title_chat(
     // Take at most the first 2 messages (user + assistant) to keep it cheap
     let msgs: Vec<ApiMessage> = input.messages.into_iter().take(2).collect();
 
-    let client = Client::new();
+    let client = http_client();
 
     // Convert to simple JSON messages (no attachments for title generation)
     let to_json = |m: &ApiMessage| serde_json::json!({"role": m.role, "content": m.content});
 
     let body_text = match input.provider.as_str() {
         "ollama" => {
-            let url = input.base_url.as_deref().unwrap_or("http://localhost:11434");
-            let sys_msg = ApiMessage { role: "system".to_string(), content: system, attachments: vec![] };
+            let url = input
+                .base_url
+                .as_deref()
+                .unwrap_or("http://localhost:11434");
+            let sys_msg = ApiMessage {
+                role: "system".to_string(),
+                content: system,
+                attachments: vec![],
+            };
             let mut all_json = vec![to_json(&sys_msg)];
             all_json.extend(msgs.iter().map(|m| to_json(m)));
             let body = OllamaRequest {
                 model: input.model,
                 messages: all_json,
                 stream: false,
-                options: Some(OllamaOptions { temperature: Some(0.3), num_predict: Some(20) }),
+                options: Some(OllamaOptions {
+                    temperature: Some(0.3),
+                    num_predict: Some(20),
+                }),
             };
-            let resp = client.post(format!("{url}/api/chat")).json(&body).send().await.map_err(|e| e.to_string())?;
+            let resp = client
+                .post(format!("{url}/api/chat"))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
             let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
             json.get("message")
                 .and_then(|m| m.get("content"))
@@ -295,7 +332,11 @@ pub async fn auto_title_chat(
                 "openrouter" => "https://openrouter.ai/api/v1",
                 _ => "https://api.openai.com/v1",
             };
-            let sys_msg = ApiMessage { role: "system".to_string(), content: system, attachments: vec![] };
+            let sys_msg = ApiMessage {
+                role: "system".to_string(),
+                content: system,
+                attachments: vec![],
+            };
             let mut all_json = vec![to_json(&sys_msg)];
             all_json.extend(msgs.iter().map(|m| to_json(m)));
             let body = OpenAIRequest {
@@ -310,7 +351,9 @@ pub async fn auto_title_chat(
                 .header("content-type", "application/json")
                 .header("authorization", format!("Bearer {api_key}"))
                 .json(&body)
-                .send().await.map_err(|e| e.to_string())?;
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
             let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
             json.get("choices")
                 .and_then(|c| c.as_array())
@@ -339,7 +382,9 @@ pub async fn auto_title_chat(
                 .header("anthropic-version", "2023-06-01")
                 .header("x-api-key", &api_key)
                 .json(&body)
-                .send().await.map_err(|e| e.to_string())?;
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
             let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
             json.get("content")
                 .and_then(|c| c.as_array())
@@ -368,7 +413,7 @@ pub struct OllamaModel {
 #[tauri::command]
 pub async fn list_ollama_models(base_url: Option<String>) -> Result<Vec<OllamaModel>, String> {
     let url = base_url.as_deref().unwrap_or("http://localhost:11434");
-    let client = Client::new();
+    let client = http_client();
 
     let resp = client
         .get(format!("{url}/api/tags"))
@@ -397,7 +442,11 @@ pub async fn list_ollama_models(base_url: Option<String>) -> Result<Vec<OllamaMo
                         .and_then(|s| s.as_str())
                         .unwrap_or("")
                         .to_string();
-                    Some(OllamaModel { name, size, modified_at })
+                    Some(OllamaModel {
+                        name,
+                        size,
+                        modified_at,
+                    })
                 })
                 .collect()
         })
@@ -413,7 +462,11 @@ fn read_image_base64(path: &str) -> Result<(String, String), String> {
     use base64::Engine;
     let p = std::path::Path::new(path);
     let bytes = std::fs::read(p).map_err(|e| format!("Failed to read image {path}: {e}"))?;
-    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
     let mime = match ext.as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -450,8 +503,8 @@ fn build_anthropic_message(msg: &ApiMessage) -> Result<serde_json::Value, String
                 }));
             }
             "pdf" => {
-                let bytes = std::fs::read(&att.path)
-                    .map_err(|e| format!("Failed to read PDF: {e}"))?;
+                let bytes =
+                    std::fs::read(&att.path).map_err(|e| format!("Failed to read PDF: {e}"))?;
                 let text = pdf_extract::extract_text_from_mem(&bytes)
                     .map_err(|e| format!("Failed to extract PDF text: {e}"))?;
                 content_blocks.push(serde_json::json!({
@@ -508,8 +561,8 @@ fn build_openai_message(msg: &ApiMessage) -> Result<serde_json::Value, String> {
                 }));
             }
             "pdf" => {
-                let bytes = std::fs::read(&att.path)
-                    .map_err(|e| format!("Failed to read PDF: {e}"))?;
+                let bytes =
+                    std::fs::read(&att.path).map_err(|e| format!("Failed to read PDF: {e}"))?;
                 let text = pdf_extract::extract_text_from_mem(&bytes)
                     .map_err(|e| format!("Failed to extract PDF text: {e}"))?;
                 content_parts.push(serde_json::json!({
@@ -562,8 +615,8 @@ fn build_ollama_message(msg: &ApiMessage) -> Result<serde_json::Value, String> {
                 images.push(data);
             }
             "pdf" => {
-                let bytes = std::fs::read(&att.path)
-                    .map_err(|e| format!("Failed to read PDF: {e}"))?;
+                let bytes =
+                    std::fs::read(&att.path).map_err(|e| format!("Failed to read PDF: {e}"))?;
                 let text = pdf_extract::extract_text_from_mem(&bytes)
                     .map_err(|e| format!("Failed to extract PDF text: {e}"))?;
                 extra_text.push_str(&format!("[PDF: {}]\n{}\n\n", att.name, text));
@@ -624,8 +677,8 @@ async fn sse_stream_loop(
                     Some(Ok(bytes)) => {
                         buf.push_str(&String::from_utf8_lossy(&bytes));
                         while let Some(pos) = buf.find('\n') {
-                            let line = buf[..pos].trim_end().to_string();
-                            buf = buf[pos + 1..].to_string();
+                            let tail = buf.split_off(pos + 1);
+                            let line = buf[..pos].trim_end();
 
                             if let Some(data) = line.strip_prefix("data: ") {
                                 if data == "[DONE]" {
@@ -637,10 +690,18 @@ async fn sse_stream_loop(
                                 }
                                 handle_data(data, &mut full_text, app, chat_id);
                             }
+
+                            buf = tail;
                         }
                     }
                     Some(Err(e)) => return Err(e.to_string()),
                     None => {
+                        let line = buf.trim_end();
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            if data != "[DONE]" {
+                                handle_data(data, &mut full_text, app, chat_id);
+                            }
+                        }
                         let _ = app.emit("stream-done", StreamDonePayload {
                             chat_id: chat_id.to_string(),
                             full_text: full_text.clone(),
@@ -676,7 +737,7 @@ async fn stream_anthropic(
     temperature: Option<f64>,
     max_tokens: u32,
 ) -> Result<(), String> {
-    let client = Client::new();
+    let client = http_client();
 
     let json_messages: Vec<serde_json::Value> = messages
         .iter()
@@ -708,18 +769,24 @@ async fn stream_anthropic(
         return Err(format!("Anthropic API error {status}: {body_text}"));
     }
 
-    sse_stream_loop(app, chat_id, cancel, response, |data, full_text, app, cid| {
-        if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
-            // content_block_delta → delta.text
-            if let Some(delta) = event.get("delta") {
-                if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
-                    full_text.push_str(text);
-                    emit_token(app, cid, text);
+    sse_stream_loop(
+        app,
+        chat_id,
+        cancel,
+        response,
+        |data, full_text, app, cid| {
+            if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
+                // content_block_delta → delta.text
+                if let Some(delta) = event.get("delta") {
+                    if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
+                        full_text.push_str(text);
+                        emit_token(app, cid, text);
+                    }
                 }
+                // message_stop triggers done via the SSE loop detecting end-of-stream
             }
-            // message_stop triggers done via the SSE loop detecting end-of-stream
-        }
-    })
+        },
+    )
     .await
 }
 
@@ -739,11 +806,14 @@ async fn stream_openai(
 ) -> Result<(), String> {
     // Prepend system prompt as a system message
     if let Some(sys) = system_prompt.filter(|s| !s.is_empty()) {
-        messages.insert(0, ApiMessage {
-            role: "system".to_string(),
-            content: sys,
-            attachments: vec![],
-        });
+        messages.insert(
+            0,
+            ApiMessage {
+                role: "system".to_string(),
+                content: sys,
+                attachments: vec![],
+            },
+        );
     }
 
     let json_messages: Vec<serde_json::Value> = messages
@@ -756,7 +826,7 @@ async fn stream_openai(
         _ => "https://api.openai.com/v1",
     };
 
-    let client = Client::new();
+    let client = http_client();
 
     let body = OpenAIRequest {
         model: model.to_string(),
@@ -781,21 +851,27 @@ async fn stream_openai(
         return Err(format!("{provider} API error {status}: {body_text}"));
     }
 
-    sse_stream_loop(app, chat_id, cancel, response, |data, full_text, app, cid| {
-        if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
-            // OpenAI SSE: choices[0].delta.content
-            if let Some(choices) = event.get("choices").and_then(|c| c.as_array()) {
-                if let Some(first) = choices.first() {
-                    if let Some(delta) = first.get("delta") {
-                        if let Some(text) = delta.get("content").and_then(|t| t.as_str()) {
-                            full_text.push_str(text);
-                            emit_token(app, cid, text);
+    sse_stream_loop(
+        app,
+        chat_id,
+        cancel,
+        response,
+        |data, full_text, app, cid| {
+            if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
+                // OpenAI SSE: choices[0].delta.content
+                if let Some(choices) = event.get("choices").and_then(|c| c.as_array()) {
+                    if let Some(first) = choices.first() {
+                        if let Some(delta) = first.get("delta") {
+                            if let Some(text) = delta.get("content").and_then(|t| t.as_str()) {
+                                full_text.push_str(text);
+                                emit_token(app, cid, text);
+                            }
                         }
                     }
                 }
             }
-        }
-    })
+        },
+    )
     .await
 }
 
@@ -813,11 +889,14 @@ async fn stream_ollama(
     max_tokens: u32,
 ) -> Result<(), String> {
     if let Some(sys) = system_prompt.filter(|s| !s.is_empty()) {
-        messages.insert(0, ApiMessage {
-            role: "system".to_string(),
-            content: sys,
-            attachments: vec![],
-        });
+        messages.insert(
+            0,
+            ApiMessage {
+                role: "system".to_string(),
+                content: sys,
+                attachments: vec![],
+            },
+        );
     }
 
     let json_messages: Vec<serde_json::Value> = messages
@@ -825,7 +904,7 @@ async fn stream_ollama(
         .map(|m| build_ollama_message(m))
         .collect::<Result<_, _>>()?;
 
-    let client = Client::new();
+    let client = http_client();
 
     let body = OllamaRequest {
         model: model.to_string(),
@@ -868,9 +947,12 @@ async fn stream_ollama(
                     Some(Ok(bytes)) => {
                         buf.push_str(&String::from_utf8_lossy(&bytes));
                         while let Some(pos) = buf.find('\n') {
-                            let line = buf[..pos].trim().to_string();
-                            buf = buf[pos + 1..].to_string();
-                            if line.is_empty() { continue; }
+                            let tail = buf.split_off(pos + 1);
+                            let line = buf[..pos].trim();
+                            if line.is_empty() {
+                                buf = tail;
+                                continue;
+                            }
 
                             match serde_json::from_str::<OllamaStreamChunk>(&line) {
                                 Ok(chunk) => {
@@ -892,10 +974,28 @@ async fn stream_ollama(
                                     eprintln!("Failed to parse Ollama chunk: {e}: {line}");
                                 }
                             }
+
+                            buf = tail;
                         }
                     }
                     Some(Err(e)) => return Err(e.to_string()),
                     None => {
+                        let line = buf.trim();
+                        if !line.is_empty() {
+                            match serde_json::from_str::<OllamaStreamChunk>(line) {
+                                Ok(chunk) => {
+                                    if let Some(msg) = &chunk.message {
+                                        if !msg.content.is_empty() {
+                                            full_text.push_str(&msg.content);
+                                            emit_token(app, chat_id, &msg.content);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to parse trailing Ollama chunk: {e}: {line}");
+                                }
+                            }
+                        }
                         let _ = app.emit("stream-done", StreamDonePayload {
                             chat_id: chat_id.to_string(),
                             full_text: full_text.clone(),

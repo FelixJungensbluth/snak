@@ -70,9 +70,16 @@ function RootComponent() {
     function scheduleDeferredReindex(savedPath: string) {
       const startReindex = () => {
         if (cancelled) return;
-        api.reindexAllChats(savedPath).catch((e) =>
-          console.error("FTS reindex failed:", e)
-        );
+        api.reindexAllChats(savedPath)
+          .then(() => {
+            if (cancelled) return null;
+            return api.listNodes();
+          })
+          .then((nodes) => {
+            if (cancelled || !nodes) return;
+            setNodes(nodes);
+          })
+          .catch((e) => console.error("FTS reindex failed:", e));
       };
 
       if (typeof window.requestIdleCallback === "function") {

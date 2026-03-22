@@ -35,6 +35,10 @@ export default function Onboarding() {
       await api.openWorkspace(pendingPath + "/snak.db");
       const nodes = await api.listNodes();
       setNodes(nodes);
+      void api.reindexAllChats(pendingPath)
+        .then(() => api.listNodes())
+        .then((reindexedNodes) => setNodes(reindexedNodes))
+        .catch((e) => console.error("FTS reindex failed:", e));
       setStep("apikey");
     } catch (e) {
       setError(String(e));

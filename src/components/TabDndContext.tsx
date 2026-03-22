@@ -14,7 +14,6 @@ import { Folder, MessageSquare } from "lucide-react";
 import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
-import { buildChildIndex } from "../utils/buildChildIndex";
 import * as api from "../api/workspace";
 
 // ── Drag data types ──────────────────────────────────────────────────────────
@@ -59,9 +58,9 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
   const [overFolderId, setOverFolderId] = useState<string | null>(null);
 
   const nodes = useWorkspaceStore((s) => s.nodes);
+  const workspaceIndex = useWorkspaceStore((s) => s.index);
   const setNodes = useWorkspaceStore((s) => s.setNodes);
   const splitPane = usePaneStore((s) => s.splitPane);
-  const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
   const openTab = useTabStore((s) => s.openTab);
   const moveTab = useTabStore((s) => s.moveTab);
 
@@ -105,14 +104,14 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const overNode = nodes.find((n) => n.id === overId);
+      const overNode = workspaceIndex.byId.get(overId);
       if (overNode?.type === "folder" && overId !== activeDrag.nodeId) {
         setOverFolderId(overId);
       } else {
         setOverFolderId(null);
       }
     },
-    [activeDrag, nodes]
+    [activeDrag, workspaceIndex]
   );
 
   const handleDragEnd = useCallback(
@@ -150,11 +149,9 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
         const draggedId = drag.nodeId;
         if (draggedId === dropId) return;
 
-        const draggedNode = nodes.find((n) => n.id === draggedId);
-        const overNode = nodes.find((n) => n.id === dropId);
+        const draggedNode = workspaceIndex.byId.get(draggedId);
+        const overNode = workspaceIndex.byId.get(dropId);
         if (!draggedNode || !overNode) return;
-
-        const childIndex = buildChildIndex(nodes);
 
         let targetParentId: string | null;
         let siblings: WorkspaceNode[];
@@ -162,14 +159,14 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
         if (overNode.type === "folder" && currentOverFolderId === dropId) {
           // Reparent into folder
           targetParentId = dropId;
-          siblings = [...(childIndex.get(dropId) ?? [])];
+          siblings = [...(workspaceIndex.childrenByParent.get(dropId) ?? [])];
           const existingIdx = siblings.findIndex((n) => n.id === draggedId);
           if (existingIdx >= 0) siblings.splice(existingIdx, 1);
           siblings.unshift({ ...draggedNode, parent_id: targetParentId });
         } else {
           // Reorder among siblings
           targetParentId = overNode.parent_id;
-          siblings = [...(childIndex.get(targetParentId) ?? [])];
+          siblings = [...(workspaceIndex.childrenByParent.get(targetParentId) ?? [])];
           const fromIdx = siblings.findIndex((n) => n.id === draggedId);
           if (fromIdx >= 0) siblings.splice(fromIdx, 1);
           const toIdx = siblings.findIndex((n) => n.id === dropId);
@@ -201,7 +198,7 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
         }
       }
     },
-    [activeDrag, overFolderId, nodes, splitPane, moveTab, openTab, setNodes, focusedPaneId]
+    [activeDrag, overFolderId, nodes, workspaceIndex, splitPane, moveTab, openTab, setNodes]
   );
 
   const handleDragCancel = useCallback(() => {
@@ -214,9 +211,9 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
   let overlayIcon: "chat" | "folder" = "chat";
   if (activeDrag) {
     if (activeDrag.type === "tab") {
-      overlayName = nodes.find((n) => n.id === activeDrag.chatId)?.name ?? "Untitled";
+      overlayName = workspaceIndex.byId.get(activeDrag.chatId)?.name ?? "Untitled";
     } else {
-      const n = nodes.find((n) => n.id === activeDrag.nodeId);
+      const n = workspaceIndex.byId.get(activeDrag.nodeId);
       overlayName = n?.name ?? "Untitled";
       overlayIcon = n?.type === "folder" ? "folder" : "chat";
     }

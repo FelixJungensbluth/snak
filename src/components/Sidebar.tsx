@@ -8,13 +8,14 @@ import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
 import { useUiStore } from "../stores/uiStore";
 import FileTree from "./FileTree";
+import { filterWorkspaceNodes } from "../utils/workspaceIndex";
 
 
 const MIN_WIDTH = 140;
 const MAX_WIDTH = 480;
 
 export default function Sidebar() {
-  const nodes = useWorkspaceStore((s) => s.nodes);
+  const workspaceIndex = useWorkspaceStore((s) => s.index);
   const rootPath = useWorkspaceStore((s) => s.rootPath);
   const upsertNode = useWorkspaceStore((s) => s.upsertNode);
   const defaultProvider = useSettingsStore((s) => s.defaultProvider);
@@ -28,25 +29,8 @@ export default function Sidebar() {
 
   // Filter nodes by chat name when sidebar filter is active
   const filteredNodes = useMemo(() => {
-    if (!sidebarFilter.trim()) return nodes;
-    const lower = sidebarFilter.toLowerCase();
-    // Keep chats that match and all folders (to preserve hierarchy)
-    const matchingChatIds = new Set(
-      nodes
-        .filter((n) => n.type === "chat" && n.name.toLowerCase().includes(lower))
-        .map((n) => n.id)
-    );
-    // Also keep folders that are ancestors of matching chats
-    const keepIds = new Set(matchingChatIds);
-    for (const chatId of matchingChatIds) {
-      let node = nodes.find((n) => n.id === chatId);
-      while (node?.parent_id) {
-        keepIds.add(node.parent_id);
-        node = nodes.find((n) => n.id === node!.parent_id);
-      }
-    }
-    return nodes.filter((n) => keepIds.has(n.id));
-  }, [nodes, sidebarFilter]);
+    return filterWorkspaceNodes(workspaceIndex, sidebarFilter);
+  }, [workspaceIndex, sidebarFilter]);
   const [creating, setCreating] = useState(false);
   const [bgCtxMenu, setBgCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const bgCtxRef = useRef<HTMLDivElement>(null);
@@ -80,6 +64,14 @@ export default function Sidebar() {
       const nodes = await api.listNodes();
       useWorkspaceStore.getState().setNodes(nodes);
       useWorkspaceStore.getState().setRootPath(path);
+      void api.reindexAllChats(path)
+        .then(() => api.listNodes())
+        .then((reindexedNodes) => {
+          if (useWorkspaceStore.getState().rootPath === path) {
+            useWorkspaceStore.getState().setNodes(reindexedNodes);
+          }
+        })
+        .catch((e) => console.error("FTS reindex failed:", e));
     } catch (e) {
       console.error("Failed to switch workspace:", e);
     }

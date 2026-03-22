@@ -15,7 +15,7 @@ export default function ChatFinderOverlay() {
 function ChatFinderInner() {
   const close = useUiStore((s) => s.closeChatFinder);
   const setSidebarFilter = useUiStore((s) => s.setSidebarFilter);
-  const nodes = useWorkspaceStore((s) => s.nodes);
+  const chatNodes = useWorkspaceStore((s) => s.index.chatNodes);
   const openTab = useTabStore((s) => s.openTab);
   const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
 
@@ -25,11 +25,10 @@ function ChatFinderInner() {
   const listRef = useRef<HTMLDivElement>(null);
 
   const chats = useMemo(() => {
-    const chatNodes = nodes.filter((n) => n.type === "chat");
     if (!query.trim()) return chatNodes;
     const lower = query.toLowerCase();
     return chatNodes.filter((n) => n.name.toLowerCase().includes(lower));
-  }, [nodes, query]);
+  }, [chatNodes, query]);
 
   const clampedIdx = Math.min(selectedIdx, Math.max(0, chats.length - 1));
 

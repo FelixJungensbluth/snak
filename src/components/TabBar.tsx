@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X, MessageSquare, PanelRight, PanelBottom, XCircle, Loader2 } from "lucide-react";
 import { useDraggable } from "@dnd-kit/core";
 import { useTabStore } from "../stores/tabStore";
@@ -19,7 +19,7 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
   const closeOtherTabs = useTabStore((s) => s.closeOtherTabs);
   const closeTabsToRight = useTabStore((s) => s.closeTabsToRight);
   const openTab = useTabStore((s) => s.openTab);
-  const nodes = useWorkspaceStore((s) => s.nodes);
+  const nodeById = useWorkspaceStore((s) => s.index.byId);
   const splitPane = usePaneStore((s) => s.splitPane);
   const chats = useChatStore((s) => s.chats);
 
@@ -34,13 +34,6 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [ctxMenu]);
-
-  // O(1) lookup instead of O(n) find per tab
-  const nodeMap = useMemo(() => {
-    const map = new Map<string, (typeof nodes)[number]>();
-    for (const n of nodes) map.set(n.id, n);
-    return map;
-  }, [nodes]);
 
   const chatIds = paneTabs?.chatIds ?? [];
   const activeChatId = paneTabs?.activeChatId ?? null;
@@ -60,7 +53,7 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
     <div className="flex items-end bg-surface border-b border-border h-[35px]">
       <div className="flex items-end flex-1 overflow-x-auto">
       {chatIds.map((chatId) => {
-        const node = nodeMap.get(chatId);
+        const node = nodeById.get(chatId);
         const name = node?.name ?? "Untitled";
         const isActive = chatId === activeChatId;
 

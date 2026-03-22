@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result, params};
+use rusqlite::{params, Connection, Result};
 
 pub struct NodeRow {
     pub id: String,
@@ -31,6 +31,14 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
             created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
             updated_at  INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
         );",
+    )?;
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_nodes_tree
+         ON nodes(is_archived, parent_id, order_idx, name);
+
+         CREATE INDEX IF NOT EXISTS idx_nodes_chat_reindex
+         ON nodes(type, is_archived, parent_id);",
     )?;
 
     // FTS5 virtual table with Porter stemming for full-text search over messages
@@ -83,12 +91,7 @@ pub fn update_last_message(conn: &Connection, chat_id: &str, preview: &str) -> R
 }
 
 /// Insert a message into the FTS index.
-pub fn index_message(
-    conn: &Connection,
-    content: &str,
-    chat_id: &str,
-    msg_id: &str,
-) -> Result<()> {
+pub fn index_message(conn: &Connection, content: &str, chat_id: &str, msg_id: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO messages_fts (content, chat_id, msg_id) VALUES (?1, ?2, ?3)",
         params![content, chat_id, msg_id],
@@ -177,11 +180,7 @@ pub struct FtsResult {
 }
 
 /// Full-text search over messages. Returns up to `limit` results.
-pub fn search_messages(
-    conn: &Connection,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<FtsResult>> {
+pub fn search_messages(conn: &Connection, query: &str, limit: usize) -> Result<Vec<FtsResult>> {
     // Sanitize: strip FTS5 special chars, split into tokens, add prefix '*' to last token
     let tokens: Vec<String> = query
         .split_whitespace()
@@ -205,7 +204,13 @@ pub fn search_messages(
         tokens
             .iter()
             .enumerate()
-            .map(|(i, t)| if i == last { format!("\"{}\"*", t) } else { format!("\"{}\"", t) })
+            .map(|(i, t)| {
+                if i == last {
+                    format!("\"{}\"*", t)
+                } else {
+                    format!("\"{}\"", t)
+                }
+            })
             .collect::<Vec<_>>()
             .join(" ")
     };
@@ -242,8 +247,17 @@ mod tests {
     fn test_insert_and_query_node() {
         let conn = in_memory_db();
 
-        insert_node(&conn, "node-1", "chat", "My Chat", None, 0, Some("anthropic"), Some("claude-sonnet-4-6"))
-            .expect("insert node");
+        insert_node(
+            &conn,
+            "node-1",
+            "chat",
+            "My Chat",
+            None,
+            0,
+            Some("anthropic"),
+            Some("claude-sonnet-4-6"),
+        )
+        .expect("insert node");
 
         let (id, name, node_type): (String, String, String) = conn
             .query_row(
@@ -264,8 +278,17 @@ mod tests {
 
         insert_node(&conn, "folder-1", "folder", "Work", None, 0, None, None)
             .expect("insert folder");
-        insert_node(&conn, "chat-1", "chat", "Project Alpha", Some("folder-1"), 0, Some("openai"), Some("gpt-4o"))
-            .expect("insert child chat");
+        insert_node(
+            &conn,
+            "chat-1",
+            "chat",
+            "Project Alpha",
+            Some("folder-1"),
+            0,
+            Some("openai"),
+            Some("gpt-4o"),
+        )
+        .expect("insert child chat");
 
         let parent_id: Option<String> = conn
             .query_row(
@@ -302,13 +325,9 @@ mod tests {
     fn test_archive_node() {
         let conn = in_memory_db();
 
-        insert_node(&conn, "chat-arc", "chat", "Old Chat", None, 0, None, None)
-            .expect("insert");
-        conn.execute(
-            "UPDATE nodes SET is_archived = 1 WHERE id = 'chat-arc'",
-            [],
-        )
-        .expect("archive");
+        insert_node(&conn, "chat-arc", "chat", "Old Chat", None, 0, None, None).expect("insert");
+        conn.execute("UPDATE nodes SET is_archived = 1 WHERE id = 'chat-arc'", [])
+            .expect("archive");
 
         let is_archived: i64 = conn
             .query_row(
@@ -327,12 +346,27 @@ mod tests {
 
         insert_node(&conn, "chat-fts", "chat", "FTS Chat", None, 0, None, None)
             .expect("insert chat");
-        index_message(&conn, "The quick brown fox jumps over the lazy dog", "chat-fts", "msg-1")
-            .expect("index msg 1");
-        index_message(&conn, "Laziness is a virtue in programming", "chat-fts", "msg-2")
-            .expect("index msg 2");
-        index_message(&conn, "Rust makes systems programming safe and fast", "chat-fts", "msg-3")
-            .expect("index msg 3");
+        index_message(
+            &conn,
+            "The quick brown fox jumps over the lazy dog",
+            "chat-fts",
+            "msg-1",
+        )
+        .expect("index msg 1");
+        index_message(
+            &conn,
+            "Laziness is a virtue in programming",
+            "chat-fts",
+            "msg-2",
+        )
+        .expect("index msg 2");
+        index_message(
+            &conn,
+            "Rust makes systems programming safe and fast",
+            "chat-fts",
+            "msg-3",
+        )
+        .expect("index msg 3");
 
         let results = search_messages(&conn, "jump", 10).expect("search");
         assert!(!results.is_empty(), "expected FTS results for 'jump'");
@@ -351,8 +385,17 @@ mod tests {
 
         insert_node(&conn, "folder-a", "folder", "Folder A", None, 0, None, None).expect("fa");
         insert_node(&conn, "folder-b", "folder", "Folder B", None, 1, None, None).expect("fb");
-        insert_node(&conn, "chat-mv", "chat", "Moveable Chat", Some("folder-a"), 0, None, None)
-            .expect("chat");
+        insert_node(
+            &conn,
+            "chat-mv",
+            "chat",
+            "Moveable Chat",
+            Some("folder-a"),
+            0,
+            None,
+            None,
+        )
+        .expect("chat");
 
         conn.execute(
             "UPDATE nodes SET parent_id = 'folder-b' WHERE id = 'chat-mv'",

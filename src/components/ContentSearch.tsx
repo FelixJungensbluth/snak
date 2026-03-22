@@ -27,7 +27,8 @@ export default function ContentSearchOverlay() {
 function ContentSearchInner() {
   const close = useUiStore((s) => s.closeContentSearch);
   const setScrollToMessageId = useUiStore((s) => s.setScrollToMessageId);
-  const nodes = useWorkspaceStore((s) => s.nodes);
+  const chatNodes = useWorkspaceStore((s) => s.index.chatNodes);
+  const nodeById = useWorkspaceStore((s) => s.index.byId);
   const rootPath = useWorkspaceStore((s) => s.rootPath);
   const openTab = useTabStore((s) => s.openTab);
   const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
@@ -50,11 +51,6 @@ function ContentSearchInner() {
     new Map<string, { role: string; content: string }[]>(),
   );
 
-  const chatNodes = useMemo(
-    () => nodes.filter((n) => n.type === "chat"),
-    [nodes],
-  );
-
   // Items derived from settledQuery + ftsResults — stable between keystrokes
   const items: ChatMatch[] = useMemo(() => {
     if (!settledQuery) {
@@ -71,11 +67,11 @@ function ContentSearchInner() {
     }
     const result: ChatMatch[] = [];
     for (const [chatId, results] of grouped) {
-      const node = chatNodes.find((n) => n.id === chatId);
+      const node = nodeById.get(chatId);
       if (node) result.push({ node, results });
     }
     return result;
-  }, [settledQuery, ftsResults, chatNodes]);
+  }, [settledQuery, ftsResults, chatNodes, nodeById]);
 
   const clampedIdx = Math.min(selectedIdx, Math.max(0, items.length - 1));
   const selectedItem = items[clampedIdx] ?? null;

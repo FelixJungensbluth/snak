@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useChatStore, type Chat, type Message, type Attachment } from "../stores/chatStore";
+import {
+  useChatStore,
+  type Chat,
+  type Message,
+  type Attachment,
+} from "../stores/chatStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import * as api from "../api/workspace";
 import type { MessageAttachmentInput } from "../api/workspace";
+import { createChatStreamSession } from "../utils/chatStreamSession";
+import { buildMessagePreview } from "../utils/messagePreview";
 
 /**
  * Chat engine hook — encapsulates chat loading, message sending,
@@ -22,6 +28,7 @@ export function useChatEngine(chatId: string) {
   const renameChat = useChatStore((s) => s.renameChat);
   const rootPath = useWorkspaceStore((s) => s.rootPath);
   const upsertNode = useWorkspaceStore((s) => s.upsertNode);
+  const updateLastMessage = useWorkspaceStore((s) => s.updateLastMessage);
 
   // Keep a ref to the latest chat so sendMessage doesn't depend on `chat` directly.
   // This prevents sendMessage from being recreated on every stream token.
@@ -31,6 +38,21 @@ export function useChatEngine(chatId: string) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
+
+  const removeEmptyAssistantPlaceholder = useCallback(() => {
+    const errChat = useChatStore.getState().chats[chatId];
+    if (!errChat) return;
+
+    const last = errChat.messages[errChat.messages.length - 1];
+    if (last && last.role === "assistant" && !last.content) {
+      useChatStore.setState((state) => {
+        const current = state.chats[chatId];
+        if (current) {
+          current.messages = current.messages.filter((message) => message.id !== last.id);
+        }
+      });
+    }
+  }, [chatId]);
 
   // ── Load chat from disk if not in store ──────────────────────────────────
   useEffect(() => {
@@ -75,16 +97,17 @@ export function useChatEngine(chatId: string) {
       setStreamError(null);
 
       // Save attachments to workspace and get relative paths
-      const savedAttachments: Attachment[] = [];
-      for (const att of attachments) {
-        try {
-          const relPath = await api.saveAttachment(chatId, att.path);
-          savedAttachments.push({ ...att, path: relPath });
-        } catch (e) {
-          console.error("Failed to save attachment:", e);
-          savedAttachments.push(att);
-        }
-      }
+      const savedAttachments = await Promise.all(
+        attachments.map(async (att) => {
+          try {
+            const relPath = await api.saveAttachment(chatId, att.path);
+            return { ...att, path: relPath };
+          } catch (e) {
+            console.error("Failed to save attachment:", e);
+            return att;
+          }
+        }),
+      );
 
       // Build the content text. For images, add markdown image references.
       // For PDF/markdown, note the attachment in the stored content.
@@ -112,6 +135,7 @@ export function useChatEngine(chatId: string) {
       try {
         await api.appendMessageToFile(chatId, "user", storedContent);
         await api.indexMessage(chatId, userMsg.id, storedContent);
+        updateLastMessage(chatId, buildMessagePreview(storedContent));
       } catch (e) {
         console.error("Failed to persist message:", e);
       }
@@ -145,39 +169,27 @@ export function useChatEngine(chatId: string) {
         return apiMsg;
       });
 
-      // Event listeners
-      const unlisteners: UnlistenFn[] = [];
-
-      const onToken = await listen<{ chat_id: string; token: string }>(
-        "stream-token",
-        (event) => {
-          if (event.payload.chat_id === chatId) {
-            appendToken(chatId, event.payload.token);
-          }
-        },
-      );
-      unlisteners.push(onToken);
-
       const isFirstExchange = currentChat.messages.length === 0;
-
-      const onDone = await listen<{ chat_id: string; full_text: string }>(
-        "stream-done",
-        async (event) => {
-          if (event.payload.chat_id !== chatId) return;
+      const session = await createChatStreamSession({
+        chatId,
+        onToken: (token) => {
+          appendToken(chatId, token);
+        },
+        onDone: async (fullText) => {
           const msgId = `${chatId}-${Date.now()}-assistant`;
-          finalizeStream(chatId, event.payload.full_text, msgId);
+          finalizeStream(chatId, fullText, msgId);
 
-          if (event.payload.full_text) {
+          if (fullText) {
             try {
-              await api.appendMessageToFile(chatId, "assistant", event.payload.full_text);
-              await api.indexMessage(chatId, msgId, event.payload.full_text);
+              await api.appendMessageToFile(chatId, "assistant", fullText);
+              await api.indexMessage(chatId, msgId, fullText);
+              updateLastMessage(chatId, buildMessagePreview(fullText));
             } catch (e) {
               console.error("Failed to persist assistant message:", e);
             }
           }
 
-          // Auto-title after first exchange
-          if (isFirstExchange && event.payload.full_text) {
+          if (isFirstExchange && fullText) {
             const titleSettings = useSettingsStore.getState();
             const ollamaBaseUrl = titleSettings.providers.ollama?.baseUrl || null;
             api.autoTitleChat({
@@ -185,15 +197,14 @@ export function useChatEngine(chatId: string) {
               model: currentChat.model,
               messages: [
                 { role: "user", content: text.trim() },
-                { role: "assistant", content: event.payload.full_text },
+                { role: "assistant", content: fullText },
               ],
               base_url: currentChat.provider === "ollama" ? ollamaBaseUrl : null,
             })
               .then(async (title) => {
                 if (!title || title === "New Chat") return;
                 renameChat(chatId, title);
-                const nodes = useWorkspaceStore.getState().nodes;
-                const node = nodes.find((n) => n.id === chatId);
+                const node = useWorkspaceStore.getState().index.byId.get(chatId);
                 if (node) upsertNode({ ...node, name: title });
                 try {
                   await api.renameNode(chatId, title);
@@ -203,35 +214,13 @@ export function useChatEngine(chatId: string) {
               })
               .catch((e) => console.error("Auto-title failed:", e));
           }
-
-          unlisteners.forEach((fn) => fn());
         },
-      );
-      unlisteners.push(onDone);
-
-      const onError = await listen<{ chat_id: string; error: string }>(
-        "stream-error",
-        (event) => {
-          if (event.payload.chat_id !== chatId) return;
-          setStreamError(event.payload.error);
+        onError: (errorMessage) => {
+          setStreamError(errorMessage);
           setStreaming(chatId, false);
-          // Remove empty placeholder
-          const errChat = useChatStore.getState().chats[chatId];
-          if (errChat) {
-            const last = errChat.messages[errChat.messages.length - 1];
-            if (last && last.role === "assistant" && !last.content) {
-              useChatStore.setState((state) => {
-                const c = state.chats[chatId];
-                if (c) {
-                  c.messages = c.messages.filter((m) => m.id !== last.id);
-                }
-              });
-            }
-          }
-          unlisteners.forEach((fn) => fn());
+          removeEmptyAssistantPlaceholder();
         },
-      );
-      unlisteners.push(onError);
+      });
 
       // Start streaming
       const settings = useSettingsStore.getState();
@@ -251,10 +240,22 @@ export function useChatEngine(chatId: string) {
       } catch (e) {
         setStreamError(String(e));
         setStreaming(chatId, false);
-        unlisteners.forEach((fn) => fn());
+        session.dispose();
+        removeEmptyAssistantPlaceholder();
       }
     },
-    [chatId, rootPath, addMessage, appendToken, finalizeStream, setStreaming, renameChat, upsertNode],
+    [
+      chatId,
+      rootPath,
+      addMessage,
+      appendToken,
+      finalizeStream,
+      setStreaming,
+      renameChat,
+      upsertNode,
+      updateLastMessage,
+      removeEmptyAssistantPlaceholder,
+    ],
   );
 
   // ── Abort streaming ──────────────────────────────────────────────────────

@@ -39,7 +39,10 @@ pub fn db_health(state: State<'_, DbState>) -> Result<DbHealthResponse, String> 
     let node_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM nodes", [], |row| row.get(0))
         .map_err(|e| e.to_string())?;
-    Ok(DbHealthResponse { ok: true, node_count })
+    Ok(DbHealthResponse {
+        ok: true,
+        node_count,
+    })
 }
 
 // ── Workspace path persistence ───────────────────────────────────────────────
@@ -160,10 +163,7 @@ pub struct InsertNodePayload {
 
 /// Low-level insert a node row (used by integration tests / direct callers).
 #[tauri::command]
-pub fn insert_node(
-    payload: InsertNodePayload,
-    state: State<'_, DbState>,
-) -> Result<(), String> {
+pub fn insert_node(payload: InsertNodePayload, state: State<'_, DbState>) -> Result<(), String> {
     let guard = state.0.lock().unwrap();
     let conn = guard.as_ref().ok_or("No workspace open")?;
     db::insert_node(
@@ -292,8 +292,17 @@ pub fn create_folder(
         )
         .unwrap_or(0);
 
-    db::insert_node(conn, &id, "folder", &display_name, parent_id.as_deref(), order_idx, None, None)
-        .map_err(|e| e.to_string())?;
+    db::insert_node(
+        conn,
+        &id,
+        "folder",
+        &display_name,
+        parent_id.as_deref(),
+        order_idx,
+        None,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(NodeResponse {
         id,
@@ -471,10 +480,7 @@ pub fn move_node(
     }
 
     // Find the new order_idx from position in sibling_ids
-    let new_order_idx = sibling_ids
-        .iter()
-        .position(|s| s == &id)
-        .unwrap_or(0) as i64;
+    let new_order_idx = sibling_ids.iter().position(|s| s == &id).unwrap_or(0) as i64;
 
     // Move the chat .md file on disk if parent changed
     let old_parent_id: Option<String> = conn
@@ -518,8 +524,7 @@ pub fn move_node(
         }
     }
 
-    db::move_node(conn, &id, new_parent_id.as_deref(), new_order_idx)
-        .map_err(|e| e.to_string())?;
+    db::move_node(conn, &id, new_parent_id.as_deref(), new_order_idx).map_err(|e| e.to_string())?;
     db::reorder_siblings(conn, &sibling_ids).map_err(|e| e.to_string())?;
 
     Ok(())
@@ -545,7 +550,7 @@ pub struct ChatFileResponse {
 /// Read a chat `.md` file and parse its YAML frontmatter + message blocks.
 ///
 /// Message format in the file:
-/// ```
+/// ```text
 /// ## user
 /// message content
 ///
@@ -673,8 +678,30 @@ pub fn append_message_to_file(
         .map_err(|e| e.to_string())?;
 
     write!(file, "\n## {role}\n{content}\n").map_err(|e| e.to_string())?;
+    if let Some(preview) = message_preview(&content) {
+        db::update_last_message(conn, &chat_id, &preview).map_err(|e| e.to_string())?;
+    }
 
     Ok(())
+}
+
+fn message_preview(content: &str) -> Option<String> {
+    let collapsed = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+
+    const MAX_LEN: usize = 140;
+    if collapsed.chars().count() <= MAX_LEN {
+        return Some(collapsed);
+    }
+
+    let mut preview = collapsed.chars().take(MAX_LEN - 1).collect::<String>();
+    while preview.ends_with(' ') {
+        preview.pop();
+    }
+    preview.push('…');
+    Some(preview)
 }
 
 /// Persist provider/model changes for an existing chat in both file frontmatter and DB.
@@ -763,7 +790,9 @@ pub fn save_session(workspace_root: String, json: String) -> Result<(), String> 
 /// Load session JSON from `<workspace>/.snak/session.json`. Returns `null` if not found.
 #[tauri::command]
 pub fn load_session(workspace_root: String) -> Result<Option<String>, String> {
-    let file = Path::new(&workspace_root).join(".snak").join("session.json");
+    let file = Path::new(&workspace_root)
+        .join(".snak")
+        .join("session.json");
     if !file.exists() {
         return Ok(None);
     }
@@ -785,16 +814,12 @@ pub async fn reindex_all_chats(workspace_root: String) -> Result<usize, String> 
 
 fn reindex_all_chats_inner(workspace_root: &str) -> Result<usize, String> {
     let db_path = Path::new(workspace_root).join("snak.db");
-    let conn = db::open_workspace_db(
+    let mut conn = db::open_workspace_db(
         db_path
             .to_str()
             .ok_or("Workspace database path contains invalid UTF-8")?,
     )
     .map_err(|e| e.to_string())?;
-
-    // Clear existing FTS index
-    conn.execute("DELETE FROM messages_fts", [])
-        .map_err(|e| e.to_string())?;
 
     // Get all chat nodes
     let mut stmt = conn
@@ -805,11 +830,30 @@ fn reindex_all_chats_inner(workspace_root: &str) -> Result<usize, String> {
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .collect();
+    drop(stmt);
 
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM messages_fts", [])
+        .map_err(|e| e.to_string())?;
+    let mut insert_stmt = tx
+        .prepare_cached("INSERT INTO messages_fts (content, chat_id, msg_id) VALUES (?1, ?2, ?3)")
+        .map_err(|e| e.to_string())?;
+    let mut update_preview_stmt = tx
+        .prepare_cached(
+            "UPDATE nodes
+             SET last_message = ?1, updated_at = strftime('%s','now') * 1000
+             WHERE id = ?2",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let workspace_root_path = Path::new(workspace_root);
     let mut total_indexed: usize = 0;
 
     for (chat_id, parent_id) in &chats {
-        let dir = node_dir_for_parent(workspace_root, parent_id.as_deref(), &conn)?;
+        let dir = parent_id.as_deref().map_or_else(
+            || workspace_root_path.to_path_buf(),
+            |pid| workspace_root_path.join(pid),
+        );
         let file_path = dir.join(format!("{chat_id}.md"));
         let raw = match fs::read_to_string(&file_path) {
             Ok(r) => r,
@@ -831,15 +875,19 @@ fn reindex_all_chats_inner(workspace_root: &str) -> Result<usize, String> {
         let mut current_role: Option<String> = None;
         let mut current_content = String::new();
         let mut msg_idx: usize = 0;
+        let mut last_preview: Option<String> = None;
 
         for line in body.lines() {
             let trimmed = line.trim();
             if trimmed == "## user" || trimmed == "## assistant" || trimmed == "## system" {
                 if let Some(_role) = current_role.take() {
-                    let content = current_content.trim().to_string();
+                    let content = current_content.trim();
                     if !content.is_empty() {
                         let msg_id = format!("{chat_id}-{msg_idx}");
-                        let _ = db::index_message(&conn, &content, chat_id, &msg_id);
+                        insert_stmt
+                            .execute(rusqlite::params![content, chat_id, msg_id])
+                            .map_err(|e| e.to_string())?;
+                        last_preview = message_preview(&content);
                         total_indexed += 1;
                         msg_idx += 1;
                     }
@@ -853,14 +901,27 @@ fn reindex_all_chats_inner(workspace_root: &str) -> Result<usize, String> {
         }
         // Flush last message
         if let Some(_role) = current_role {
-            let content = current_content.trim().to_string();
+            let content = current_content.trim();
             if !content.is_empty() {
                 let msg_id = format!("{chat_id}-{msg_idx}");
-                let _ = db::index_message(&conn, &content, chat_id, &msg_id);
+                insert_stmt
+                    .execute(rusqlite::params![content, chat_id, msg_id])
+                    .map_err(|e| e.to_string())?;
+                last_preview = message_preview(&content);
                 total_indexed += 1;
             }
         }
+
+        if let Some(preview) = last_preview {
+            update_preview_stmt
+                .execute(rusqlite::params![preview, chat_id])
+                .map_err(|e| e.to_string())?;
+        }
     }
+
+    drop(insert_stmt);
+    drop(update_preview_stmt);
+    tx.commit().map_err(|e| e.to_string())?;
 
     Ok(total_indexed)
 }
