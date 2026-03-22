@@ -19,17 +19,30 @@ pub struct StreamState(pub Mutex<HashMap<String, CancellationToken>>);
 pub struct ApiMessage {
     pub role: String,
     pub content: String,
+    #[serde(default)]
+    pub attachments: Vec<MessageAttachment>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct MessageAttachment {
+    /// "image", "pdf", "markdown"
+    pub attachment_type: String,
+    /// Absolute path to the file on disk
+    pub path: String,
+    pub name: String,
 }
 
 // ── Anthropic types ──────────────────────────────────────────────────────────
 
+/// Anthropic messages use `content` as either a string or array of content blocks.
+/// We build them as serde_json::Value to handle both cases.
 #[derive(Serialize)]
 struct AnthropicRequest {
     model: String,
     max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<String>,
-    messages: Vec<ApiMessage>,
+    messages: Vec<serde_json::Value>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f64>,
@@ -37,10 +50,11 @@ struct AnthropicRequest {
 
 // ── OpenAI types ─────────────────────────────────────────────────────────────
 
+/// OpenAI messages use `content` as either a string or array of content parts.
 #[derive(Serialize)]
 struct OpenAIRequest {
     model: String,
-    messages: Vec<ApiMessage>,
+    messages: Vec<serde_json::Value>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f64>,
@@ -53,7 +67,7 @@ struct OpenAIRequest {
 #[derive(Serialize)]
 struct OllamaRequest {
     model: String,
-    messages: Vec<ApiMessage>,
+    messages: Vec<serde_json::Value>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<OllamaOptions>,
@@ -252,14 +266,18 @@ pub async fn auto_title_chat(
 
     let client = Client::new();
 
+    // Convert to simple JSON messages (no attachments for title generation)
+    let to_json = |m: &ApiMessage| serde_json::json!({"role": m.role, "content": m.content});
+
     let body_text = match input.provider.as_str() {
         "ollama" => {
             let url = input.base_url.as_deref().unwrap_or("http://localhost:11434");
-            let mut all_msgs = vec![ApiMessage { role: "system".to_string(), content: system }];
-            all_msgs.extend(msgs);
+            let sys_msg = ApiMessage { role: "system".to_string(), content: system, attachments: vec![] };
+            let mut all_json = vec![to_json(&sys_msg)];
+            all_json.extend(msgs.iter().map(|m| to_json(m)));
             let body = OllamaRequest {
                 model: input.model,
-                messages: all_msgs,
+                messages: all_json,
                 stream: false,
                 options: Some(OllamaOptions { temperature: Some(0.3), num_predict: Some(20) }),
             };
@@ -277,11 +295,12 @@ pub async fn auto_title_chat(
                 "openrouter" => "https://openrouter.ai/api/v1",
                 _ => "https://api.openai.com/v1",
             };
-            let mut all_msgs = vec![ApiMessage { role: "system".to_string(), content: system }];
-            all_msgs.extend(msgs);
+            let sys_msg = ApiMessage { role: "system".to_string(), content: system, attachments: vec![] };
+            let mut all_json = vec![to_json(&sys_msg)];
+            all_json.extend(msgs.iter().map(|m| to_json(m)));
             let body = OpenAIRequest {
                 model: input.model,
-                messages: all_msgs,
+                messages: all_json,
                 stream: false,
                 temperature: Some(0.3),
                 max_tokens: Some(20),
@@ -305,11 +324,12 @@ pub async fn auto_title_chat(
         }
         _ => {
             // Anthropic
+            let json_msgs: Vec<serde_json::Value> = msgs.iter().map(|m| to_json(m)).collect();
             let body = AnthropicRequest {
                 model: input.model,
                 max_tokens: 30,
                 system: Some(system),
-                messages: msgs,
+                messages: json_msgs,
                 stream: false,
                 temperature: Some(0.3),
             };
@@ -333,6 +353,246 @@ pub async fn auto_title_chat(
     };
 
     Ok(body_text)
+}
+
+// ── Ollama model listing ─────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct OllamaModel {
+    pub name: String,
+    pub size: u64,
+    pub modified_at: String,
+}
+
+/// Fetch the list of locally available Ollama models via `GET /api/tags`.
+#[tauri::command]
+pub async fn list_ollama_models(base_url: Option<String>) -> Result<Vec<OllamaModel>, String> {
+    let url = base_url.as_deref().unwrap_or("http://localhost:11434");
+    let client = Client::new();
+
+    let resp = client
+        .get(format!("{url}/api/tags"))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to Ollama at {url}: {e}. Is Ollama running?"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Ollama error {status}: {body}"));
+    }
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    let models = json
+        .get("models")
+        .and_then(|m| m.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    let name = m.get("name")?.as_str()?.to_string();
+                    let size = m.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+                    let modified_at = m
+                        .get("modified_at")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    Some(OllamaModel { name, size, modified_at })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(models)
+}
+
+// ── Multimodal message builders ──────────────────────────────────────────────
+
+/// Read a file and return (base64_data, mime_type).
+fn read_image_base64(path: &str) -> Result<(String, String), String> {
+    use base64::Engine;
+    let p = std::path::Path::new(path);
+    let bytes = std::fs::read(p).map_err(|e| format!("Failed to read image {path}: {e}"))?;
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => "image/png",
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok((encoded, mime.to_string()))
+}
+
+/// Build Anthropic-format message (content as array when attachments present).
+fn build_anthropic_message(msg: &ApiMessage) -> Result<serde_json::Value, String> {
+    if msg.attachments.is_empty() {
+        return Ok(serde_json::json!({
+            "role": msg.role,
+            "content": msg.content,
+        }));
+    }
+
+    let mut content_blocks = Vec::new();
+
+    for att in &msg.attachments {
+        match att.attachment_type.as_str() {
+            "image" => {
+                let (data, media_type) = read_image_base64(&att.path)?;
+                content_blocks.push(serde_json::json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": data,
+                    }
+                }));
+            }
+            "pdf" => {
+                let bytes = std::fs::read(&att.path)
+                    .map_err(|e| format!("Failed to read PDF: {e}"))?;
+                let text = pdf_extract::extract_text_from_mem(&bytes)
+                    .map_err(|e| format!("Failed to extract PDF text: {e}"))?;
+                content_blocks.push(serde_json::json!({
+                    "type": "text",
+                    "text": format!("[PDF: {}]\n{}", att.name, text),
+                }));
+            }
+            "markdown" => {
+                let text = std::fs::read_to_string(&att.path)
+                    .map_err(|e| format!("Failed to read markdown file: {e}"))?;
+                content_blocks.push(serde_json::json!({
+                    "type": "text",
+                    "text": format!("[File: {}]\n{}", att.name, text),
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    // Add the user's text message last
+    if !msg.content.is_empty() {
+        content_blocks.push(serde_json::json!({
+            "type": "text",
+            "text": msg.content,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "role": msg.role,
+        "content": content_blocks,
+    }))
+}
+
+/// Build OpenAI-format message (content as array when attachments present).
+fn build_openai_message(msg: &ApiMessage) -> Result<serde_json::Value, String> {
+    if msg.attachments.is_empty() {
+        return Ok(serde_json::json!({
+            "role": msg.role,
+            "content": msg.content,
+        }));
+    }
+
+    let mut content_parts = Vec::new();
+
+    for att in &msg.attachments {
+        match att.attachment_type.as_str() {
+            "image" => {
+                let (data, media_type) = read_image_base64(&att.path)?;
+                content_parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": format!("data:{media_type};base64,{data}"),
+                    }
+                }));
+            }
+            "pdf" => {
+                let bytes = std::fs::read(&att.path)
+                    .map_err(|e| format!("Failed to read PDF: {e}"))?;
+                let text = pdf_extract::extract_text_from_mem(&bytes)
+                    .map_err(|e| format!("Failed to extract PDF text: {e}"))?;
+                content_parts.push(serde_json::json!({
+                    "type": "text",
+                    "text": format!("[PDF: {}]\n{}", att.name, text),
+                }));
+            }
+            "markdown" => {
+                let text = std::fs::read_to_string(&att.path)
+                    .map_err(|e| format!("Failed to read markdown file: {e}"))?;
+                content_parts.push(serde_json::json!({
+                    "type": "text",
+                    "text": format!("[File: {}]\n{}", att.name, text),
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    if !msg.content.is_empty() {
+        content_parts.push(serde_json::json!({
+            "type": "text",
+            "text": msg.content,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "role": msg.role,
+        "content": content_parts,
+    }))
+}
+
+/// Build Ollama-format message. Images go in a separate `images` field as base64.
+/// Text attachments (PDF, markdown) are prepended to the content.
+fn build_ollama_message(msg: &ApiMessage) -> Result<serde_json::Value, String> {
+    if msg.attachments.is_empty() {
+        return Ok(serde_json::json!({
+            "role": msg.role,
+            "content": msg.content,
+        }));
+    }
+
+    let mut images: Vec<String> = Vec::new();
+    let mut extra_text = String::new();
+
+    for att in &msg.attachments {
+        match att.attachment_type.as_str() {
+            "image" => {
+                let (data, _mime) = read_image_base64(&att.path)?;
+                images.push(data);
+            }
+            "pdf" => {
+                let bytes = std::fs::read(&att.path)
+                    .map_err(|e| format!("Failed to read PDF: {e}"))?;
+                let text = pdf_extract::extract_text_from_mem(&bytes)
+                    .map_err(|e| format!("Failed to extract PDF text: {e}"))?;
+                extra_text.push_str(&format!("[PDF: {}]\n{}\n\n", att.name, text));
+            }
+            "markdown" => {
+                let text = std::fs::read_to_string(&att.path)
+                    .map_err(|e| format!("Failed to read markdown file: {e}"))?;
+                extra_text.push_str(&format!("[File: {}]\n{}\n\n", att.name, text));
+            }
+            _ => {}
+        }
+    }
+
+    let content = if extra_text.is_empty() {
+        msg.content.clone()
+    } else {
+        format!("{extra_text}{}", msg.content)
+    };
+
+    let mut val = serde_json::json!({
+        "role": msg.role,
+        "content": content,
+    });
+
+    if !images.is_empty() {
+        val["images"] = serde_json::json!(images);
+    }
+
+    Ok(val)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -418,11 +678,16 @@ async fn stream_anthropic(
 ) -> Result<(), String> {
     let client = Client::new();
 
+    let json_messages: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| build_anthropic_message(m))
+        .collect::<Result<_, _>>()?;
+
     let body = AnthropicRequest {
         model: model.to_string(),
         max_tokens,
         system: system_prompt.filter(|s| !s.is_empty()),
-        messages,
+        messages: json_messages,
         stream: true,
         temperature,
     };
@@ -477,8 +742,14 @@ async fn stream_openai(
         messages.insert(0, ApiMessage {
             role: "system".to_string(),
             content: sys,
+            attachments: vec![],
         });
     }
+
+    let json_messages: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| build_openai_message(m))
+        .collect::<Result<_, _>>()?;
 
     let base_url = match provider {
         "openrouter" => "https://openrouter.ai/api/v1",
@@ -489,7 +760,7 @@ async fn stream_openai(
 
     let body = OpenAIRequest {
         model: model.to_string(),
-        messages,
+        messages: json_messages,
         stream: true,
         temperature,
         max_tokens: Some(max_tokens),
@@ -545,14 +816,20 @@ async fn stream_ollama(
         messages.insert(0, ApiMessage {
             role: "system".to_string(),
             content: sys,
+            attachments: vec![],
         });
     }
+
+    let json_messages: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| build_ollama_message(m))
+        .collect::<Result<_, _>>()?;
 
     let client = Client::new();
 
     let body = OllamaRequest {
         model: model.to_string(),
-        messages,
+        messages: json_messages,
         stream: true,
         options: Some(OllamaOptions {
             temperature,

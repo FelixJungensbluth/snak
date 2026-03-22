@@ -54,11 +54,17 @@ export function searchMessages(query: string, limit: number) {
 
 // ── Streaming ───────────────────────────────────────────────────────────────
 
+export interface MessageAttachmentInput {
+  attachment_type: string;
+  path: string;
+  name: string;
+}
+
 export interface StreamChatInput {
   chat_id: string;
   provider: string;
   model: string;
-  messages: { role: string; content: string }[];
+  messages: { role: string; content: string; attachments?: MessageAttachmentInput[] }[];
   system_prompt: string | null;
   temperature: number | null;
   max_tokens: number | null;
@@ -196,4 +202,40 @@ export function setApiKey(provider: string, apiKey: string) {
 
 export function deleteApiKey(provider: string) {
   return invoke("delete_api_key", { provider });
+}
+
+// ── Ollama ───────────────────────────────────────────────────────────────────
+
+export interface OllamaModel {
+  name: string;
+  size: number;
+  modified_at: string;
+}
+
+export function listOllamaModels(baseUrl?: string | null) {
+  return invoke<OllamaModel[]>("list_ollama_models", {
+    baseUrl: baseUrl ?? null,
+  });
+}
+
+// ── Attachments ──────────────────────────────────────────────────────────────
+
+export function saveAttachment(chatId: string, sourcePath: string) {
+  return invoke<string>("save_attachment", {
+    workspaceRoot: getRootPath(),
+    chatId,
+    sourcePath,
+  });
+}
+
+export function extractPdfText(filePath: string) {
+  return invoke<string>("extract_pdf_text", { filePath });
+}
+
+export function readFileText(filePath: string) {
+  return invoke<string>("read_file_text", { filePath });
+}
+
+export function readFileBase64(filePath: string) {
+  return invoke<[string, string]>("read_file_base64", { filePath });
 }
