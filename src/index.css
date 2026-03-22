@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "katex/dist/katex.min.css";
+@import "highlight.js/styles/github-dark.min.css";
 
 @theme {
   /* surface palette */
@@ -56,5 +58,75 @@
   }
   ::-webkit-scrollbar-thumb:hover {
     background: rgba(255 255 255 / 0.2);
+  }
+}
+
+/* Scoped markdown styles for assistant messages */
+.markdown-body {
+  p {
+    margin: 0.4em 0;
+  }
+  p:first-child {
+    margin-top: 0;
+  }
+  p:last-child {
+    margin-bottom: 0;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+    margin: 0.8em 0 0.4em;
+    line-height: 1.3;
+  }
+  h1 { font-size: 1.3em; }
+  h2 { font-size: 1.15em; }
+  h3 { font-size: 1.05em; }
+
+  ul, ol {
+    margin: 0.4em 0;
+    padding-left: 1.4em;
+  }
+  ul { list-style: disc; }
+  ol { list-style: decimal; }
+  li { margin: 0.15em 0; }
+
+  blockquote {
+    border-left: 3px solid var(--color-border-strong);
+    padding-left: 0.8em;
+    margin: 0.4em 0;
+    color: var(--color-fg-muted);
+  }
+
+  table {
+    border-collapse: collapse;
+    margin: 0.5em 0;
+    width: 100%;
+  }
+  th, td {
+    border: 1px solid var(--color-border-strong);
+    padding: 0.3em 0.6em;
+    text-align: left;
+  }
+  th {
+    background: var(--color-bg);
+    font-weight: 600;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--color-border-strong);
+    margin: 0.8em 0;
+  }
+
+  /* Override highlight.js background to match app theme */
+  pre code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+
+  /* KaTeX display math */
+  .katex-display {
+    margin: 0.5em 0;
+    overflow-x: auto;
   }
 }

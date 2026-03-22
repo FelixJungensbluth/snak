@@ -1,0 +1,106 @@
+import { memo, useCallback, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import remarkGfm from "remark-gfm";
+import rehypeKatex from "rehype-katex";
+import rehypeHighlight from "rehype-highlight";
+import { Copy, Check } from "lucide-react";
+
+function CopyButton({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 2000);
+  }, [code]);
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="absolute top-1.5 right-1.5 p-1 rounded bg-surface-hover text-fg-muted hover:text-fg transition-colors opacity-0 group-hover:opacity-100"
+      title="Copy code"
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+    </button>
+  );
+}
+
+function extractText(node: unknown): string {
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) return node.map(extractText).join("");
+  if (node && typeof node === "object" && "props" in (node as Record<string, unknown>)) {
+    const props = (node as { props?: { children?: unknown } }).props;
+    return extractText(props?.children);
+  }
+  return "";
+}
+
+const MarkdownRenderer = memo(function MarkdownRenderer({
+  content,
+}: {
+  content: string;
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkMath, remarkGfm]}
+      rehypePlugins={[rehypeKatex, rehypeHighlight]}
+      components={{
+        pre({ children }) {
+          const code = extractText(children);
+          return (
+            <div className="relative group my-2">
+              <CopyButton code={code} />
+              <pre className="overflow-x-auto rounded bg-bg p-3 text-[12px] leading-[1.5]">
+                {children}
+              </pre>
+            </div>
+          );
+        },
+        code({ className, children, ...props }) {
+          const isBlock = className?.startsWith("hljs") || className?.includes("language-");
+          if (isBlock) {
+            return (
+              <code className={className} {...props}>
+                {children}
+              </code>
+            );
+          }
+          return (
+            <code className="bg-bg px-1 py-0.5 rounded text-[12px]" {...props}>
+              {children}
+            </code>
+          );
+        },
+        a({ href, children }) {
+          return (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent-hover underline"
+            >
+              {children}
+            </a>
+          );
+        },
+        img({ src, alt }) {
+          return (
+            <img
+              src={src}
+              alt={alt ?? ""}
+              className="max-w-full rounded my-2"
+              loading="lazy"
+            />
+          );
+        },
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+});
+
+export default MarkdownRenderer;

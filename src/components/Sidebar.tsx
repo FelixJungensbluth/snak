@@ -1,9 +1,10 @@
 import { useCallback, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Plus, FolderPlus } from "lucide-react";
+import { Plus, FolderPlus, Sparkles } from "lucide-react";
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import FileTree from "./FileTree";
+import { seedDemoChat } from "../seedDemo";
 
 const MIN_WIDTH = 140;
 const MAX_WIDTH = 480;
@@ -70,6 +71,31 @@ export default function Sidebar() {
     }
   }
 
+  // ── seed demo chat ─────────────────────────────────────────────────────
+  async function createDemoChat() {
+    if (!rootPath || creating) return;
+    setBgCtxMenu(null);
+    setCreating(true);
+    try {
+      const result = await seedDemoChat(rootPath);
+      upsertNode({
+        id: result.id,
+        type: "chat" as const,
+        name: result.name,
+        parent_id: result.parent_id,
+        order_idx: result.order_idx,
+        is_archived: result.is_archived,
+        provider: result.provider,
+        model: result.model,
+        last_message: result.last_message,
+      });
+    } catch (e) {
+      console.error("create demo chat failed:", e);
+    } finally {
+      setCreating(false);
+    }
+  }
+
   // ── background right-click (empty area) ─────────────────────────────────
 
   function handleBgContext(e: React.MouseEvent) {
@@ -128,6 +154,12 @@ export default function Sidebar() {
             icon={<FolderPlus size={12} />}
             label="New Folder"
             onClick={() => createNode("folder")}
+          />
+          <div className="border-t border-border my-0.5" />
+          <BgCtxItem
+            icon={<Sparkles size={12} />}
+            label="Create Demo Chat"
+            onClick={createDemoChat}
           />
         </div>
       )}

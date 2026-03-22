@@ -7,6 +7,7 @@ import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import ChatSettings from "./ChatSettings";
 import ModelSelector from "./ModelSelector";
+import MarkdownRenderer from "./MarkdownRenderer";
 
 interface ChatViewProps {
   chatId: string;
@@ -321,19 +322,30 @@ const MessageBubble = memo(function MessageBubble({
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
 
+  const isAssistant = message.role === "assistant";
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[75%] px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap ${
+        className={`max-w-[75%] px-3 py-2 text-xs leading-relaxed ${
           isUser
-            ? "bg-accent text-fg"
+            ? "bg-accent text-fg whitespace-pre-wrap"
             : isSystem
-              ? "bg-surface-raised text-fg-muted italic"
-              : "bg-surface-raised text-fg"
+              ? "bg-surface-raised text-fg-muted italic whitespace-pre-wrap"
+              : "bg-surface-raised text-fg markdown-body"
         }`}
       >
-        {message.content}
-        {isStreaming && <StreamingCursor />}
+        {isAssistant ? (
+          <>
+            <MarkdownRenderer content={message.content} />
+            {isStreaming && <StreamingCursor />}
+          </>
+        ) : (
+          <>
+            {message.content}
+            {isStreaming && <StreamingCursor />}
+          </>
+        )}
       </div>
     </div>
   );
