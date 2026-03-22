@@ -1,5 +1,10 @@
+import { useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Plus, X } from "lucide-react";
 import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
+import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import TabBar from "./TabBar";
 import ChatView from "./ChatView";
 
@@ -9,24 +14,67 @@ interface PaneViewProps {
 
 export default function PaneView({ paneId }: PaneViewProps) {
   const paneTabs = useTabStore((s) => s.panes[paneId]);
+  const openTab = useTabStore((s) => s.openTab);
   const setFocusedPane = usePaneStore((s) => s.setFocusedPane);
+  const closePane = usePaneStore((s) => s.closePane);
+  const root = usePaneStore((s) => s.root);
   const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
+  const rootPath = useWorkspaceStore((s) => s.rootPath);
+  const upsertNode = useWorkspaceStore((s) => s.upsertNode);
+  const defaultProvider = useSettingsStore((s) => s.defaultProvider);
+  const defaultModel = useSettingsStore((s) => s.defaultModel);
   const activeChatId = paneTabs?.activeChatId ?? null;
+
+  const hasMultiplePanes = root.kind === "split";
+
+  const handleNewChat = useCallback(async () => {
+    if (!rootPath) return;
+    try {
+      const node = await invoke<WorkspaceNode>("create_chat", {
+        workspaceRoot: rootPath,
+        provider: defaultProvider,
+        model: defaultModel,
+      });
+      upsertNode(node);
+      openTab(paneId, node.id);
+    } catch (e) {
+      console.error("create chat failed:", e);
+    }
+  }, [rootPath, defaultProvider, defaultModel, upsertNode, openTab, paneId]);
 
   return (
     <div
-      className={`flex flex-col h-full w-full ${
-        focusedPaneId === paneId ? "" : ""
-      }`}
+      className="flex flex-col h-full w-full"
       onClick={() => setFocusedPane(paneId)}
     >
-      <TabBar paneId={paneId} />
+      <div className="relative">
+        <TabBar paneId={paneId} isFocused={hasMultiplePanes && focusedPaneId === paneId} />
+        {hasMultiplePanes && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              closePane(paneId);
+            }}
+            className="absolute top-1 right-1 p-0.5 text-fg-muted hover:text-fg hover:bg-surface-hover rounded transition-colors z-10"
+            title="Close pane"
+          >
+            <X size={12} />
+          </button>
+        )}
+      </div>
       <div className="flex-1 overflow-hidden">
         {activeChatId ? (
           <ChatView chatId={activeChatId} />
         ) : (
-          <div className="flex items-center justify-center h-full">
-            <p className="text-xs text-fg-dim">Select or create a chat</p>
+          <div className="flex flex-col items-center justify-center h-full gap-3">
+            <button
+              onClick={handleNewChat}
+              className="flex items-center gap-2 px-4 py-2 text-xs text-fg bg-surface-raised hover:bg-surface-hover border border-border rounded transition-colors"
+            >
+              <Plus size={14} />
+              New Chat
+            </button>
+            <p className="text-[10px] text-fg-dim">or select a chat from the sidebar</p>
           </div>
         )}
       </div>

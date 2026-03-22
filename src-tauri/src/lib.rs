@@ -8,8 +8,9 @@ use commands::keys::{delete_api_key, get_api_key, set_api_key};
 use commands::streaming::{abort_stream, auto_title_chat, stream_chat, StreamState};
 use commands::workspace::{
     append_message_to_file, archive_node, create_chat, create_folder, db_health, delete_node,
-    get_saved_workspace, index_message, insert_node, list_nodes, open_workspace, read_chat_file,
-    rename_node, save_workspace, search_messages, update_chat_model_config, DbState,
+    get_saved_workspace, index_message, insert_node, list_nodes, load_session, open_workspace,
+    read_chat_file, rename_node, save_session, save_workspace, search_messages,
+    update_chat_model_config, DbState,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -38,6 +39,8 @@ pub fn run() {
             update_chat_model_config,
             get_saved_workspace,
             save_workspace,
+            save_session,
+            load_session,
             // api keys
             set_api_key,
             get_api_key,
