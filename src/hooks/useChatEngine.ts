@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useChatStore, type Chat, type Message } from "../stores/chatStore";
+import { useChatStore, type Chat, type Message, type Attachment } from "../stores/chatStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import * as api from "../api/workspace";
+import type { MessageAttachmentInput } from "../api/workspace";
 
 /**
  * Chat engine hook — encapsulates chat loading, message sending,
@@ -67,25 +68,50 @@ export function useChatEngine(chatId: string) {
 
   // ── Send message + start streaming ───────────────────────────────────────
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, attachments: Attachment[] = []) => {
       const currentChat = chatRef.current;
-      if (!text.trim() || !rootPath || !currentChat || currentChat.streaming) return;
+      if ((!text.trim() && attachments.length === 0) || !rootPath || !currentChat || currentChat.streaming) return;
 
       setStreamError(null);
+
+      // Save attachments to workspace and get relative paths
+      const savedAttachments: Attachment[] = [];
+      for (const att of attachments) {
+        try {
+          const relPath = await api.saveAttachment(chatId, att.path);
+          savedAttachments.push({ ...att, path: relPath });
+        } catch (e) {
+          console.error("Failed to save attachment:", e);
+          savedAttachments.push(att);
+        }
+      }
+
+      // Build the content text. For images, add markdown image references.
+      // For PDF/markdown, note the attachment in the stored content.
+      let storedContent = text.trim();
+      for (const att of savedAttachments) {
+        if (att.type === "image") {
+          storedContent += `\n\n![${att.name}](${att.path})`;
+        } else if (att.type === "pdf") {
+          storedContent += `\n\n📎 ${att.name}`;
+        } else if (att.type === "markdown") {
+          storedContent += `\n\n📎 ${att.name}`;
+        }
+      }
 
       const userMsg: Message = {
         id: `${chatId}-${Date.now()}`,
         role: "user",
-        content: text.trim(),
-        attachments: [],
+        content: storedContent,
+        attachments: savedAttachments,
         created_at: Date.now(),
       };
       addMessage(chatId, userMsg);
 
       // Persist user message
       try {
-        await api.appendMessageToFile(chatId, "user", text.trim());
-        await api.indexMessage(chatId, userMsg.id, text.trim());
+        await api.appendMessageToFile(chatId, "user", storedContent);
+        await api.indexMessage(chatId, userMsg.id, storedContent);
       } catch (e) {
         console.error("Failed to persist message:", e);
       }
@@ -101,10 +127,23 @@ export function useChatEngine(chatId: string) {
       addMessage(chatId, assistantMsg);
       setStreaming(chatId, true);
 
-      const apiMessages = [...currentChat.messages, userMsg].map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      // Build API messages — include attachment info for the current user message
+      // so Rust can build multimodal content blocks
+      const apiMessages = [...currentChat.messages, userMsg].map((m) => {
+        const apiMsg: { role: string; content: string; attachments?: MessageAttachmentInput[] } = {
+          role: m.role,
+          content: m.content,
+        };
+        // Only attach files for the message being sent (current user message)
+        if (m.id === userMsg.id && attachments.length > 0) {
+          apiMsg.attachments = attachments.map((a) => ({
+            attachment_type: a.type,
+            path: a.path, // original absolute path — Rust reads the file from here
+            name: a.name,
+          }));
+        }
+        return apiMsg;
+      });
 
       // Event listeners
       const unlisteners: UnlistenFn[] = [];

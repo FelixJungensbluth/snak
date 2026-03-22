@@ -4,8 +4,9 @@ use std::sync::Mutex;
 pub mod commands;
 pub mod db;
 
+use commands::attachments::{extract_pdf_text, read_file_base64, read_file_text, save_attachment};
 use commands::keys::{delete_api_key, get_api_key, set_api_key};
-use commands::streaming::{abort_stream, auto_title_chat, stream_chat, StreamState};
+use commands::streaming::{abort_stream, auto_title_chat, list_ollama_models, stream_chat, StreamState};
 use commands::workspace::{
     append_message_to_file, archive_node, create_chat, create_folder, db_health, delete_node,
     get_saved_workspace, index_message, insert_node, list_nodes, load_session, move_node,
@@ -51,6 +52,12 @@ pub fn run() {
             stream_chat,
             abort_stream,
             auto_title_chat,
+            list_ollama_models,
+            // attachments
+            save_attachment,
+            extract_pdf_text,
+            read_file_text,
+            read_file_base64,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

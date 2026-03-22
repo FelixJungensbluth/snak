@@ -72,12 +72,25 @@ export default function SettingsPanel() {
   }, [ollamaUrl, setProviderConfig]);
 
   const handleProviderChange = useCallback(
-    (provider: string) => {
+    async (provider: string) => {
       setDefaultProvider(provider);
+      if (provider === "ollama") {
+        // Try to fetch live models from Ollama
+        try {
+          const baseUrl = providers.ollama?.baseUrl || null;
+          const models = await api.listOllamaModels(baseUrl);
+          if (models.length > 0) {
+            setDefaultModel(models[0].name);
+            return;
+          }
+        } catch {
+          // Fall through to hardcoded list
+        }
+      }
       const models = PROVIDER_MODELS[provider] || [];
       if (models.length > 0) setDefaultModel(models[0]);
     },
-    [setDefaultProvider, setDefaultModel]
+    [setDefaultProvider, setDefaultModel, providers.ollama?.baseUrl]
   );
 
   const selectedProvider = PROVIDERS.find((p) => p.id === defaultProvider);

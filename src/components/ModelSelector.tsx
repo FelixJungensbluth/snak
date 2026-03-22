@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, RefreshCw } from "lucide-react";
 import { useChatStore } from "../stores/chatStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import * as api from "../api/workspace";
@@ -14,8 +14,17 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
   const updateModelConfig = useChatStore((s) => s.updateModelConfig);
   const defaultProvider = useSettingsStore((s) => s.defaultProvider);
   const defaultModel = useSettingsStore((s) => s.defaultModel);
+  const ollamaBaseUrl = useSettingsStore((s) => s.providers.ollama?.baseUrl);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  // Live Ollama models
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [ollamaLoading, setOllamaLoading] = useState(false);
+  const [ollamaError, setOllamaError] = useState<string | null>(null);
+
+  // Per-chat provider override: falls back to global default
+  const chatProvider = chat?.provider || defaultProvider;
 
   // Close on outside click
   useEffect(() => {
@@ -27,6 +36,27 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
+  // Fetch Ollama models when dropdown opens and Ollama is selected
+  const fetchOllamaModels = useCallback(async () => {
+    setOllamaLoading(true);
+    setOllamaError(null);
+    try {
+      const models = await api.listOllamaModels(ollamaBaseUrl);
+      setOllamaModels(models.map((m) => m.name));
+    } catch (e) {
+      setOllamaError(String(e));
+      setOllamaModels([]);
+    } finally {
+      setOllamaLoading(false);
+    }
+  }, [ollamaBaseUrl]);
+
+  useEffect(() => {
+    if (open && chatProvider === "ollama") {
+      fetchOllamaModels();
+    }
+  }, [open, chatProvider, fetchOllamaModels]);
+
   const persistConfig = useCallback(
     async (provider: string, model: string) => {
       try {
@@ -37,9 +67,6 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
     },
     [chatId]
   );
-
-  // Per-chat provider override: falls back to global default
-  const chatProvider = chat?.provider || defaultProvider;
 
   const handleSelectModel = useCallback(
     (model: string) => {
@@ -60,8 +87,11 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
   const handleSelectProvider = useCallback(
     (providerId: string) => {
       if (!chat) return;
-      const models = PROVIDER_MODELS[providerId] || [];
-      const model = models[0] || "";
+      // For Ollama, use the first live model if available, otherwise keep current
+      const models = providerId === "ollama" && ollamaModels.length > 0
+        ? ollamaModels
+        : PROVIDER_MODELS[providerId] || [];
+      const model = models[0] || chat.model;
       updateModelConfig(
         chatId,
         providerId,
@@ -71,15 +101,19 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
       );
       void persistConfig(providerId, model);
     },
-    [chatId, chat, updateModelConfig, persistConfig]
+    [chatId, chat, ollamaModels, updateModelConfig, persistConfig]
   );
 
-  const providerModels = PROVIDER_MODELS[chatProvider] || [];
+  // Use live Ollama models when available, fall back to hardcoded list
+  const providerModels = chatProvider === "ollama" && ollamaModels.length > 0
+    ? ollamaModels
+    : PROVIDER_MODELS[chatProvider] || [];
+
   const activeModel = !chat
     ? defaultModel
     : providerModels.includes(chat.model)
       ? chat.model
-      : providerModels[0] || chat.model;
+      : chat.model; // Keep the current model even if not in the list (it may still be valid)
   const providerLabel = PROVIDER_LABELS[chatProvider] || chatProvider;
 
   // Sync model if provider changed externally
@@ -147,6 +181,27 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
               </button>
             ))}
           </div>
+
+          {/* Ollama status */}
+          {chatProvider === "ollama" && (
+            <div className="px-3 py-1 border-b border-border mb-1 flex items-center gap-1.5">
+              {ollamaLoading ? (
+                <span className="text-[10px] text-fg-dim">Loading models…</span>
+              ) : ollamaError ? (
+                <span className="text-[10px] text-fg-error truncate flex-1">{ollamaError}</span>
+              ) : (
+                <span className="text-[10px] text-fg-dim">{ollamaModels.length} model{ollamaModels.length !== 1 ? "s" : ""} available</span>
+              )}
+              <button
+                onClick={(e) => { e.stopPropagation(); fetchOllamaModels(); }}
+                className="text-fg-dim hover:text-fg transition-colors p-0.5"
+                title="Refresh models"
+              >
+                <RefreshCw size={10} className={ollamaLoading ? "animate-spin" : ""} />
+              </button>
+            </div>
+          )}
+
           {/* Model list */}
           {providerModels.map((model) => (
             <button
@@ -161,6 +216,13 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
               {model}
             </button>
           ))}
+
+          {/* Empty state for Ollama */}
+          {chatProvider === "ollama" && !ollamaLoading && providerModels.length === 0 && !ollamaError && (
+            <div className="px-3 py-2 text-[10px] text-fg-dim">
+              No models found. Run <code className="bg-bg px-1 rounded">ollama pull &lt;model&gt;</code> to download one.
+            </div>
+          )}
         </div>
       )}
     </div>
