@@ -1,10 +1,12 @@
 import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Plus, X } from "lucide-react";
+import { useDroppable } from "@dnd-kit/core";
 import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useTabDndState } from "./TabDndContext";
 import TabBar from "./TabBar";
 import ChatView from "./ChatView";
 
@@ -24,8 +26,10 @@ export default function PaneView({ paneId }: PaneViewProps) {
   const defaultProvider = useSettingsStore((s) => s.defaultProvider);
   const defaultModel = useSettingsStore((s) => s.defaultModel);
   const activeChatId = paneTabs?.activeChatId ?? null;
+  const { activeDrag } = useTabDndState();
 
   const hasMultiplePanes = root.kind === "split";
+  const showDropZones = activeDrag !== null;
 
   const handleNewChat = useCallback(async () => {
     if (!rootPath) return;
@@ -44,7 +48,7 @@ export default function PaneView({ paneId }: PaneViewProps) {
 
   return (
     <div
-      className="flex flex-col h-full w-full"
+      className="flex flex-col h-full w-full relative"
       onClick={() => setFocusedPane(paneId)}
     >
       <div className="relative">
@@ -78,6 +82,43 @@ export default function PaneView({ paneId }: PaneViewProps) {
           </div>
         )}
       </div>
+
+      {/* Directional drop zones - shown when dragging a tab */}
+      {showDropZones && (
+        <>
+          <PaneDropZone paneId={paneId} direction="left" />
+          <PaneDropZone paneId={paneId} direction="right" />
+          <PaneDropZone paneId={paneId} direction="top" />
+          <PaneDropZone paneId={paneId} direction="bottom" />
+        </>
+      )}
     </div>
+  );
+}
+
+function PaneDropZone({
+  paneId,
+  direction,
+}: {
+  paneId: string;
+  direction: "left" | "right" | "top" | "bottom";
+}) {
+  const id = `pane-drop:${paneId}:${direction}`;
+  const { isOver, setNodeRef } = useDroppable({ id });
+
+  const positionClasses: Record<string, string> = {
+    left: "left-0 top-0 w-1/2 h-full",
+    right: "right-0 top-0 w-1/2 h-full",
+    top: "left-0 top-0 w-full h-1/2",
+    bottom: "left-0 bottom-0 w-full h-1/2",
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`absolute z-20 pointer-events-auto transition-colors ${positionClasses[direction]} ${
+        isOver ? "bg-accent/20 border-2 border-accent border-dashed" : ""
+      }`}
+    />
   );
 }

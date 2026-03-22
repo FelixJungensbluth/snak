@@ -144,6 +144,32 @@ pub fn delete_node(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Move a node: update its parent_id and order_idx.
+pub fn move_node(
+    conn: &Connection,
+    id: &str,
+    new_parent_id: Option<&str>,
+    new_order_idx: i64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE nodes SET parent_id = ?1, order_idx = ?2, updated_at = strftime('%s','now') * 1000
+         WHERE id = ?3",
+        params![new_parent_id, new_order_idx, id],
+    )?;
+    Ok(())
+}
+
+/// Bulk-update order_idx for a list of node IDs (in order).
+pub fn reorder_siblings(conn: &Connection, ids: &[String]) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "UPDATE nodes SET order_idx = ?1, updated_at = strftime('%s','now') * 1000 WHERE id = ?2",
+    )?;
+    for (idx, id) in ids.iter().enumerate() {
+        stmt.execute(params![idx as i64, id])?;
+    }
+    Ok(())
+}
+
 pub struct FtsResult {
     pub chat_id: String,
     pub msg_id: String,

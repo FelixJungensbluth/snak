@@ -9,9 +9,16 @@ import {
   Archive,
   Trash2,
 } from "lucide-react";
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
 import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
+import { useAppDndState, type SidebarDragData } from "./TabDndContext";
 
 // ── Pre-indexed tree entry-point ─────────────────────────────────────────────
 
@@ -29,11 +36,11 @@ function buildChildIndex(nodes: WorkspaceNode[]): ChildIndex {
     }
     list.push(node);
   }
-  // Sort each group: folders first, then alphabetical
+  // Sort each group: folders first, then by order_idx
   for (const children of index.values()) {
     children.sort((a, b) => {
       if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
-      return a.name.localeCompare(b.name);
+      return a.order_idx - b.order_idx;
     });
   }
   return index;
@@ -46,10 +53,11 @@ interface FileTreeProps {
 }
 
 export default function FileTree({ nodes, parentId, depth = 0 }: FileTreeProps) {
-  // Build index once per nodes change — O(n) instead of O(n²) recursive filtering
   const childIndex = useMemo(() => buildChildIndex(nodes), [nodes]);
 
-  return <FileTreeLevel childIndex={childIndex} parentId={parentId} depth={depth} />;
+  return (
+    <FileTreeLevel childIndex={childIndex} parentId={parentId} depth={depth} />
+  );
 }
 
 function FileTreeLevel({
@@ -64,12 +72,21 @@ function FileTreeLevel({
   const children = childIndex.get(parentId);
   if (!children || children.length === 0) return null;
 
+  const ids = children.map((n) => n.id);
+
   return (
-    <ul className="list-none">
-      {children.map((node) => (
-        <FileTreeNode key={node.id} node={node} childIndex={childIndex} depth={depth} />
-      ))}
-    </ul>
+    <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+      <ul className="list-none">
+        {children.map((node) => (
+          <FileTreeNode
+            key={node.id}
+            node={node}
+            childIndex={childIndex}
+            depth={depth}
+          />
+        ))}
+      </ul>
+    </SortableContext>
   );
 }
 
@@ -85,6 +102,7 @@ function FileTreeNode({
   depth: number;
 }) {
   const isFolder = node.type === "folder";
+  const { activeDrag, overFolderId } = useAppDndState();
 
   const [expanded, setExpanded] = useState(true);
   const [renaming, setRenaming] = useState(false);
@@ -97,6 +115,27 @@ function FileTreeNode({
   const { rootPath, upsertNode, removeNode } = useWorkspaceStore();
   const openTab = useTabStore((s) => s.openTab);
   const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
+
+  const dragData: SidebarDragData = {
+    type: "sidebar-node",
+    nodeId: node.id,
+    nodeType: node.type,
+  };
+
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: node.id, data: dragData });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.3 : 1,
+  };
 
   useEffect(() => {
     if (renaming) {
@@ -165,11 +204,15 @@ function FileTreeNode({
   }
 
   const pl = 8 + depth * 16;
+  const isActiveNode = activeDrag?.type === "sidebar-node" && activeDrag.nodeId === node.id;
+  const isDropTarget = isFolder && overFolderId === node.id && !isActiveNode;
 
   return (
-    <li>
+    <li ref={setNodeRef} style={style}>
       <div
-        className="flex items-center h-[22px] cursor-pointer hover:bg-surface-hover select-none group"
+        className={`flex items-center h-[22px] cursor-pointer hover:bg-surface-hover select-none group ${
+          isDropTarget ? "bg-accent-selection ring-1 ring-accent ring-inset" : ""
+        }`}
         style={{ paddingLeft: `${pl}px` }}
         onClick={() => {
           if (isFolder) {
@@ -184,6 +227,8 @@ function FileTreeNode({
           e.stopPropagation();
           setCtxMenu({ x: e.clientX, y: e.clientY });
         }}
+        {...attributes}
+        {...listeners}
       >
         {/* chevron */}
         <span className="w-4 flex items-center justify-center flex-shrink-0">

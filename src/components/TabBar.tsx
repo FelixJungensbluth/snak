@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X, MessageSquare, PanelRight, PanelBottom, XCircle } from "lucide-react";
+import { useDraggable } from "@dnd-kit/core";
 import { useTabStore } from "../stores/tabStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { usePaneStore } from "../stores/paneStore";
+import type { TabDragData } from "./TabDndContext";
 
 interface TabBarProps {
   paneId: string;
@@ -61,32 +63,21 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
         const isActive = chatId === activeChatId;
 
         return (
-          <div
+          <DraggableTab
             key={chatId}
-            className={`flex items-center gap-1.5 px-3 h-[34px] cursor-pointer border-r border-border text-xs select-none shrink-0 max-w-[160px] group ${
-              isActive
-                ? `bg-bg text-fg border-t-2 ${isFocused ? "border-t-accent" : "border-t-transparent"}`
-                : "bg-surface text-fg-muted hover:bg-surface-hover border-t-2 border-t-transparent"
-            }`}
-            onClick={() => setActiveTab(paneId, chatId)}
+            chatId={chatId}
+            paneId={paneId}
+            name={name}
+            isActive={isActive}
+            isFocused={isFocused}
+            onActivate={() => setActiveTab(paneId, chatId)}
+            onClose={() => closeTab(paneId, chatId)}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
               setCtxMenu({ x: e.clientX, y: e.clientY, chatId });
             }}
-          >
-            <MessageSquare size={12} className="text-icon-chat shrink-0" />
-            <span className="truncate">{name}</span>
-            <button
-              className="ml-auto shrink-0 rounded p-0.5 text-transparent group-hover:text-fg-muted hover:text-fg hover:bg-surface-hover transition-colors w-4 h-4 flex items-center justify-center"
-              onClick={(e) => {
-                e.stopPropagation();
-                closeTab(paneId, chatId);
-              }}
-            >
-              <X size={12} />
-            </button>
-          </div>
+          />
         );
       })}
       </div>
@@ -127,6 +118,59 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function DraggableTab({
+  chatId,
+  paneId,
+  name,
+  isActive,
+  isFocused,
+  onActivate,
+  onClose,
+  onContextMenu,
+}: {
+  chatId: string;
+  paneId: string;
+  name: string;
+  isActive: boolean;
+  isFocused?: boolean;
+  onActivate: () => void;
+  onClose: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+}) {
+  const dragData: TabDragData = { type: "tab", chatId, sourcePaneId: paneId };
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `tab:${paneId}:${chatId}`,
+    data: dragData,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`flex items-center gap-1.5 px-3 h-[34px] cursor-pointer border-r border-border text-xs select-none shrink-0 max-w-[160px] group ${
+        isActive
+          ? `bg-bg text-fg border-b-2 ${isFocused ? "border-b-accent" : "border-b-transparent"}`
+          : "bg-surface text-fg-muted hover:bg-surface-hover border-b-2 border-b-transparent"
+      } ${isDragging ? "opacity-30" : ""}`}
+      onClick={onActivate}
+      onContextMenu={onContextMenu}
+      {...attributes}
+      {...listeners}
+    >
+      <MessageSquare size={12} className="text-icon-chat shrink-0" />
+      <span className="truncate">{name}</span>
+      <button
+        className="ml-auto shrink-0 rounded p-0.5 text-transparent group-hover:text-fg-muted hover:text-fg hover:bg-surface-hover transition-colors w-4 h-4 flex items-center justify-center"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+      >
+        <X size={12} />
+      </button>
     </div>
   );
 }
