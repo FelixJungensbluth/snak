@@ -216,6 +216,125 @@ pub fn abort_stream(chat_id: String, stream_state: State<'_, StreamState>) -> Re
     Ok(())
 }
 
+// ── Auto-title ──────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct AutoTitleInput {
+    pub provider: String,
+    pub model: String,
+    pub messages: Vec<ApiMessage>,
+    /// Ollama base URL override
+    pub base_url: Option<String>,
+}
+
+/// Generate a short title (3–5 words) for a chat based on its messages.
+/// Returns the title string. Failures return Err (caller should treat silently).
+#[tauri::command]
+pub async fn auto_title_chat(
+    app: AppHandle,
+    input: AutoTitleInput,
+) -> Result<String, String> {
+    let api_key = if input.provider != "ollama" {
+        let store = app.store("keys.bin").map_err(|e| e.to_string())?;
+        let key_name = format!("api_key:{}", input.provider);
+        store
+            .get(&key_name)
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .ok_or_else(|| format!("No API key for '{}'", input.provider))?
+    } else {
+        String::new()
+    };
+
+    let system = "Generate a concise title (3-5 words) for this conversation. Reply with ONLY the title, no quotes or punctuation.".to_string();
+
+    // Take at most the first 2 messages (user + assistant) to keep it cheap
+    let msgs: Vec<ApiMessage> = input.messages.into_iter().take(2).collect();
+
+    let client = Client::new();
+
+    let body_text = match input.provider.as_str() {
+        "ollama" => {
+            let url = input.base_url.as_deref().unwrap_or("http://localhost:11434");
+            let mut all_msgs = vec![ApiMessage { role: "system".to_string(), content: system }];
+            all_msgs.extend(msgs);
+            let body = OllamaRequest {
+                model: input.model,
+                messages: all_msgs,
+                stream: false,
+                options: Some(OllamaOptions { temperature: Some(0.3), num_predict: Some(20) }),
+            };
+            let resp = client.post(format!("{url}/api/chat")).json(&body).send().await.map_err(|e| e.to_string())?;
+            let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            json.get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("New Chat")
+                .trim()
+                .to_string()
+        }
+        "openai" | "openrouter" => {
+            let base_url = match input.provider.as_str() {
+                "openrouter" => "https://openrouter.ai/api/v1",
+                _ => "https://api.openai.com/v1",
+            };
+            let mut all_msgs = vec![ApiMessage { role: "system".to_string(), content: system }];
+            all_msgs.extend(msgs);
+            let body = OpenAIRequest {
+                model: input.model,
+                messages: all_msgs,
+                stream: false,
+                temperature: Some(0.3),
+                max_tokens: Some(20),
+            };
+            let resp = client
+                .post(format!("{base_url}/chat/completions"))
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {api_key}"))
+                .json(&body)
+                .send().await.map_err(|e| e.to_string())?;
+            let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            json.get("choices")
+                .and_then(|c| c.as_array())
+                .and_then(|a| a.first())
+                .and_then(|c| c.get("message"))
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("New Chat")
+                .trim()
+                .to_string()
+        }
+        _ => {
+            // Anthropic
+            let body = AnthropicRequest {
+                model: input.model,
+                max_tokens: 30,
+                system: Some(system),
+                messages: msgs,
+                stream: false,
+                temperature: Some(0.3),
+            };
+            let resp = client
+                .post("https://api.anthropic.com/v1/messages")
+                .header("content-type", "application/json")
+                .header("anthropic-version", "2023-06-01")
+                .header("x-api-key", &api_key)
+                .json(&body)
+                .send().await.map_err(|e| e.to_string())?;
+            let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            json.get("content")
+                .and_then(|c| c.as_array())
+                .and_then(|a| a.first())
+                .and_then(|b| b.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("New Chat")
+                .trim()
+                .to_string()
+        }
+    };
+
+    Ok(body_text)
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Shared SSE streaming loop: reads byte chunks, splits on newlines, calls

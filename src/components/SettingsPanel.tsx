@@ -14,11 +14,13 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     defaultProvider,
     defaultTemperature,
     defaultMaxTokens,
+    defaultSystemPrompt,
     providers,
     setDefaultProvider,
     setDefaultModel,
     setDefaultTemperature,
     setDefaultMaxTokens,
+    setDefaultSystemPrompt,
     setProviderConfig,
   } = useSettingsStore();
 
@@ -182,6 +184,26 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </div>
           </section>
 
+          {/* ── System Prompt ─────────────────────────────────────────── */}
+          <section>
+            <h2 className="text-xs font-medium text-fg uppercase tracking-wider mb-4">
+              System Prompt
+            </h2>
+            <label className="block text-[11px] text-fg-muted mb-1">
+              Default system prompt for all chats
+            </label>
+            <textarea
+              value={defaultSystemPrompt}
+              onChange={(e) => setDefaultSystemPrompt(e.target.value)}
+              placeholder="You are a helpful assistant..."
+              rows={4}
+              className="w-full py-1.5 px-2 bg-surface-raised border border-border-strong rounded text-xs text-fg placeholder-fg-dim outline-none focus:border-accent resize-y min-h-[60px] max-h-[200px]"
+            />
+            <p className="text-[10px] text-fg-dim mt-1">
+              Applied to every chat as context for the model.
+            </p>
+          </section>
+
           {/* ── API Keys ──────────────────────────────────────────────── */}
           <section>
             <h2 className="text-xs font-medium text-fg uppercase tracking-wider mb-4">
@@ -251,7 +273,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </section>
 
           {/* ── Ollama ────────────────────────────────────────────────── */}
-          <section>
+          {defaultProvider === "ollama" && <section>
             <h2 className="text-xs font-medium text-fg uppercase tracking-wider mb-4">
               Ollama
             </h2>
@@ -280,7 +302,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             <p className="text-[10px] text-fg-dim mt-1">
               No API key needed. Make sure Ollama is running locally.
             </p>
-          </section>
+          </section>}
         </div>
       </div>
       </div>
