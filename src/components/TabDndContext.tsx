@@ -11,10 +11,11 @@ import {
   type DragOverEvent,
 } from "@dnd-kit/core";
 import { Folder, MessageSquare } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
 import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
+import { buildChildIndex } from "../utils/buildChildIndex";
+import * as api from "../api/workspace";
 
 // ── Drag data types ──────────────────────────────────────────────────────────
 
@@ -58,7 +59,6 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
   const [overFolderId, setOverFolderId] = useState<string | null>(null);
 
   const nodes = useWorkspaceStore((s) => s.nodes);
-  const rootPath = useWorkspaceStore((s) => s.rootPath);
   const setNodes = useWorkspaceStore((s) => s.setNodes);
   const splitPane = usePaneStore((s) => s.splitPane);
   const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
@@ -152,25 +152,9 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
 
         const draggedNode = nodes.find((n) => n.id === draggedId);
         const overNode = nodes.find((n) => n.id === dropId);
-        if (!draggedNode || !overNode || !rootPath) return;
+        if (!draggedNode || !overNode) return;
 
-        // Build child index
-        const childIndex = new Map<string | null, WorkspaceNode[]>();
-        for (const n of nodes) {
-          const key = n.parent_id;
-          let list = childIndex.get(key);
-          if (!list) {
-            list = [];
-            childIndex.set(key, list);
-          }
-          list.push(n);
-        }
-        for (const children of childIndex.values()) {
-          children.sort((a, b) => {
-            if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
-            return a.order_idx - b.order_idx;
-          });
-        }
+        const childIndex = buildChildIndex(nodes);
 
         let targetParentId: string | null;
         let siblings: WorkspaceNode[];
@@ -210,19 +194,14 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
         setNodes(updatedNodes);
 
         try {
-          await invoke("move_node", {
-            workspaceRoot: rootPath,
-            id: draggedId,
-            newParentId: targetParentId,
-            siblingIds,
-          });
+          await api.moveNode(draggedId, targetParentId, siblingIds);
         } catch (e) {
           console.error("move_node failed:", e);
           setNodes(nodesBeforeDrag.current);
         }
       }
     },
-    [activeDrag, overFolderId, nodes, rootPath, splitPane, moveTab, openTab, setNodes, focusedPaneId]
+    [activeDrag, overFolderId, nodes, splitPane, moveTab, openTab, setNodes, focusedPaneId]
   );
 
   const handleDragCancel = useCallback(() => {

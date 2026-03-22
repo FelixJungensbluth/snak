@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Plus, FolderPlus, Sparkles, Settings } from "lucide-react";
-import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
+import { useWorkspaceStore } from "../stores/workspaceStore";
+import * as api from "../api/workspace";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
@@ -13,7 +13,9 @@ const MIN_WIDTH = 140;
 const MAX_WIDTH = 480;
 
 export default function Sidebar() {
-  const { nodes, rootPath, upsertNode } = useWorkspaceStore();
+  const nodes = useWorkspaceStore((s) => s.nodes);
+  const rootPath = useWorkspaceStore((s) => s.rootPath);
+  const upsertNode = useWorkspaceStore((s) => s.upsertNode);
   const defaultProvider = useSettingsStore((s) => s.defaultProvider);
   const defaultModel = useSettingsStore((s) => s.defaultModel);
   const openTab = useTabStore((s) => s.openTab);
@@ -85,14 +87,8 @@ export default function Sidebar() {
     try {
       const node =
         nodeType === "chat"
-          ? await invoke<WorkspaceNode>("create_chat", {
-              workspaceRoot: rootPath,
-              provider: defaultProvider,
-              model: defaultModel,
-            })
-          : await invoke<WorkspaceNode>("create_folder", {
-              workspaceRoot: rootPath,
-            });
+          ? await api.createChat(defaultProvider, defaultModel)
+          : await api.createFolder();
       upsertNode(node);
       if (nodeType === "chat") {
         openTab(focusedPaneId, node.id);

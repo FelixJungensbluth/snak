@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, KeyRound, ArrowRight, SkipForward } from "lucide-react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
-import type { WorkspaceNode } from "../stores/workspaceStore";
+import * as api from "../api/workspace";
 
 type Step = "pick" | "apikey";
 
@@ -16,8 +15,9 @@ export default function Onboarding() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const { setRootPath, setNodes } = useWorkspaceStore();
-  const { setProviderConfig } = useSettingsStore();
+  const setRootPath = useWorkspaceStore((s) => s.setRootPath);
+  const setNodes = useWorkspaceStore((s) => s.setNodes);
+  const setProviderConfig = useSettingsStore((s) => s.setProviderConfig);
 
   async function handlePickFolder() {
     setError(null);
@@ -31,9 +31,9 @@ export default function Onboarding() {
     setLoading(true);
     setError(null);
     try {
-      await invoke("save_workspace", { path: pendingPath });
-      await invoke("open_workspace", { dbPath: pendingPath + "/snak.db" });
-      const nodes = await invoke<WorkspaceNode[]>("list_nodes");
+      await api.saveWorkspace(pendingPath);
+      await api.openWorkspace(pendingPath + "/snak.db");
+      const nodes = await api.listNodes();
       setNodes(nodes);
       setStep("apikey");
     } catch (e) {
@@ -48,7 +48,7 @@ export default function Onboarding() {
     setError(null);
     try {
       if (apiKey.trim()) {
-        await invoke("set_api_key", { provider, apiKey: apiKey.trim() });
+        await api.setApiKey(provider, apiKey.trim());
         setProviderConfig(provider, { hasApiKey: true });
       }
       setRootPath(pendingPath!);

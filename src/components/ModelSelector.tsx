@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown } from "lucide-react";
 import { useChatStore } from "../stores/chatStore";
-import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import * as api from "../api/workspace";
 import { PROVIDERS, PROVIDER_LABELS, PROVIDER_MODELS } from "../providers";
 
 interface ModelSelectorProps {
@@ -13,7 +12,6 @@ interface ModelSelectorProps {
 export default function ModelSelector({ chatId }: ModelSelectorProps) {
   const chat = useChatStore((s) => s.chats[chatId]);
   const updateModelConfig = useChatStore((s) => s.updateModelConfig);
-  const rootPath = useWorkspaceStore((s) => s.rootPath);
   const defaultProvider = useSettingsStore((s) => s.defaultProvider);
   const defaultModel = useSettingsStore((s) => s.defaultModel);
   const [open, setOpen] = useState(false);
@@ -31,19 +29,13 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
 
   const persistConfig = useCallback(
     async (provider: string, model: string) => {
-      if (!rootPath) return;
       try {
-        await invoke("update_chat_model_config", {
-          workspaceRoot: rootPath,
-          chatId,
-          provider,
-          model,
-        });
+        await api.updateChatModelConfig(chatId, provider, model);
       } catch (e) {
         console.error("Failed to persist chat model config:", e);
       }
     },
-    [rootPath, chatId]
+    [chatId]
   );
 
   // Per-chat provider override: falls back to global default
@@ -91,19 +83,26 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
   const providerLabel = PROVIDER_LABELS[chatProvider] || chatProvider;
 
   // Sync model if provider changed externally
+  const chatModel = chat?.model;
+  const chatTemp = chat?.temperature;
+  const chatMaxTokens = chat?.max_tokens;
+  const chatProviderStored = chat?.provider;
   useEffect(() => {
     if (!chat) return;
-    if (chat.model === activeModel && chat.provider === chatProvider) return;
+    if (chatModel === activeModel && chatProviderStored === chatProvider) return;
     updateModelConfig(
       chatId,
       chatProvider,
       activeModel,
-      chat.temperature,
-      chat.max_tokens
+      chatTemp ?? null,
+      chatMaxTokens ?? null
     );
     void persistConfig(chatProvider, activeModel);
   }, [
-    chat,
+    chatModel,
+    chatProviderStored,
+    chatTemp,
+    chatMaxTokens,
     chatId,
     activeModel,
     chatProvider,

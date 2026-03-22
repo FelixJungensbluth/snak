@@ -1,24 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { KeyRound, Check, Trash2, Globe, X } from "lucide-react";
+import * as api from "../api/workspace";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useUiStore } from "../stores/uiStore";
 import { PROVIDERS, PROVIDER_MODELS } from "../providers";
 
 export default function SettingsPanel() {
-  const {
-    defaultProvider,
-    defaultTemperature,
-    defaultMaxTokens,
-    defaultSystemPrompt,
-    providers,
-    setDefaultProvider,
-    setDefaultModel,
-    setDefaultTemperature,
-    setDefaultMaxTokens,
-    setDefaultSystemPrompt,
-    setProviderConfig,
-  } = useSettingsStore();
+  const defaultProvider = useSettingsStore((s) => s.defaultProvider);
+  const defaultTemperature = useSettingsStore((s) => s.defaultTemperature);
+  const defaultMaxTokens = useSettingsStore((s) => s.defaultMaxTokens);
+  const defaultSystemPrompt = useSettingsStore((s) => s.defaultSystemPrompt);
+  const providers = useSettingsStore((s) => s.providers);
+  const setDefaultProvider = useSettingsStore((s) => s.setDefaultProvider);
+  const setDefaultModel = useSettingsStore((s) => s.setDefaultModel);
+  const setDefaultTemperature = useSettingsStore((s) => s.setDefaultTemperature);
+  const setDefaultMaxTokens = useSettingsStore((s) => s.setDefaultMaxTokens);
+  const setDefaultSystemPrompt = useSettingsStore((s) => s.setDefaultSystemPrompt);
+  const setProviderConfig = useSettingsStore((s) => s.setProviderConfig);
 
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
@@ -30,7 +28,7 @@ export default function SettingsPanel() {
   useEffect(() => {
     for (const p of PROVIDERS) {
       if (!p.needsKey) continue;
-      invoke<string | null>("get_api_key", { provider: p.id }).then((key) => {
+      api.getApiKey(p.id).then((key) => {
         if (key) {
           setSaved((prev) => ({ ...prev, [p.id]: true }));
         }
@@ -43,7 +41,7 @@ export default function SettingsPanel() {
       const key = keys[provider]?.trim();
       if (!key) return;
       try {
-        await invoke("set_api_key", { provider, apiKey: key });
+        await api.setApiKey(provider, key);
         setProviderConfig(provider, { hasApiKey: true });
         setSaved((prev) => ({ ...prev, [provider]: true }));
         setKeys((prev) => ({ ...prev, [provider]: "" }));
@@ -57,7 +55,7 @@ export default function SettingsPanel() {
   const handleDeleteKey = useCallback(
     async (provider: string) => {
       try {
-        await invoke("delete_api_key", { provider });
+        await api.deleteApiKey(provider);
         setProviderConfig(provider, { hasApiKey: false });
         setSaved((prev) => ({ ...prev, [provider]: false }));
       } catch (e) {

@@ -6,6 +6,10 @@ import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import { Copy, Check } from "lucide-react";
 
+// Stable plugin arrays — avoids re-creating on every render
+const REMARK_PLUGINS = [remarkMath, remarkGfm];
+const REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight];
+
 function CopyButton({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -38,6 +42,58 @@ function extractText(node: unknown): string {
   return "";
 }
 
+// Stable components config — defined once, never recreated
+const MD_COMPONENTS = {
+  pre({ children }: { children?: React.ReactNode }) {
+    const code = extractText(children);
+    return (
+      <div className="relative group my-2">
+        <CopyButton code={code} />
+        <pre className="overflow-x-auto rounded bg-bg p-3 text-[12px] leading-[1.5]">
+          {children}
+        </pre>
+      </div>
+    );
+  },
+  code({ className, children, ...props }: React.HTMLAttributes<HTMLElement>) {
+    const isBlock = className?.startsWith("hljs") || className?.includes("language-");
+    if (isBlock) {
+      return (
+        <code className={className} {...props}>
+          {children}
+        </code>
+      );
+    }
+    return (
+      <code className="bg-bg px-1 py-0.5 rounded text-[12px]" {...props}>
+        {children}
+      </code>
+    );
+  },
+  a({ href, children }: { href?: string; children?: React.ReactNode }) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-accent-hover underline"
+      >
+        {children}
+      </a>
+    );
+  },
+  img({ src, alt }: { src?: string; alt?: string }) {
+    return (
+      <img
+        src={src}
+        alt={alt ?? ""}
+        className="max-w-full rounded my-2"
+        loading="lazy"
+      />
+    );
+  },
+};
+
 const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
 }: {
@@ -45,58 +101,9 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
 }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkMath, remarkGfm]}
-      rehypePlugins={[rehypeKatex, rehypeHighlight]}
-      components={{
-        pre({ children }) {
-          const code = extractText(children);
-          return (
-            <div className="relative group my-2">
-              <CopyButton code={code} />
-              <pre className="overflow-x-auto rounded bg-bg p-3 text-[12px] leading-[1.5]">
-                {children}
-              </pre>
-            </div>
-          );
-        },
-        code({ className, children, ...props }) {
-          const isBlock = className?.startsWith("hljs") || className?.includes("language-");
-          if (isBlock) {
-            return (
-              <code className={className} {...props}>
-                {children}
-              </code>
-            );
-          }
-          return (
-            <code className="bg-bg px-1 py-0.5 rounded text-[12px]" {...props}>
-              {children}
-            </code>
-          );
-        },
-        a({ href, children }) {
-          return (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-accent-hover underline"
-            >
-              {children}
-            </a>
-          );
-        },
-        img({ src, alt }) {
-          return (
-            <img
-              src={src}
-              alt={alt ?? ""}
-              className="max-w-full rounded my-2"
-              loading="lazy"
-            />
-          );
-        },
-      }}
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
+      components={MD_COMPONENTS}
     >
       {content}
     </ReactMarkdown>

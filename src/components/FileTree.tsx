@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -9,6 +8,7 @@ import {
   Archive,
   Trash2,
 } from "lucide-react";
+import * as api from "../api/workspace";
 import {
   SortableContext,
   verticalListSortingStrategy,
@@ -19,32 +19,7 @@ import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore"
 import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
 import { useAppDndState, type SidebarDragData } from "./TabDndContext";
-
-// ── Pre-indexed tree entry-point ─────────────────────────────────────────────
-
-/** Map from parentId (null for root) to sorted children */
-type ChildIndex = Map<string | null, WorkspaceNode[]>;
-
-function buildChildIndex(nodes: WorkspaceNode[]): ChildIndex {
-  const index: ChildIndex = new Map();
-  for (const node of nodes) {
-    const key = node.parent_id;
-    let list = index.get(key);
-    if (!list) {
-      list = [];
-      index.set(key, list);
-    }
-    list.push(node);
-  }
-  // Sort each group: folders first, then by order_idx
-  for (const children of index.values()) {
-    children.sort((a, b) => {
-      if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
-      return a.order_idx - b.order_idx;
-    });
-  }
-  return index;
-}
+import { buildChildIndex, type ChildIndex } from "../utils/buildChildIndex";
 
 interface FileTreeProps {
   nodes: WorkspaceNode[];
@@ -92,7 +67,7 @@ function FileTreeLevel({
 
 // ── Single tree node ──────────────────────────────────────────────────────────
 
-function FileTreeNode({
+const FileTreeNode = memo(function FileTreeNode({
   node,
   childIndex,
   depth,
@@ -112,7 +87,8 @@ function FileTreeNode({
   const renameRef = useRef<HTMLInputElement>(null);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
 
-  const { rootPath, upsertNode, removeNode } = useWorkspaceStore();
+  const upsertNode = useWorkspaceStore((s) => s.upsertNode);
+  const removeNode = useWorkspaceStore((s) => s.removeNode);
   const openTab = useTabStore((s) => s.openTab);
   const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
 
@@ -167,7 +143,7 @@ function FileTreeNode({
       return;
     }
     try {
-      await invoke("rename_node", { workspaceRoot: rootPath, id: node.id, newName: trimmed });
+      await api.renameNode(node.id, trimmed);
       upsertNode({ ...node, name: trimmed });
     } catch (e) {
       console.error("rename_node failed:", e);
@@ -185,7 +161,7 @@ function FileTreeNode({
   async function handleArchive() {
     setCtxMenu(null);
     try {
-      await invoke("archive_node", { id: node.id });
+      await api.archiveNode(node.id);
       removeNode(node.id);
     } catch (e) {
       console.error("archive_node failed:", e);
@@ -196,7 +172,7 @@ function FileTreeNode({
     setCtxMenu(null);
     if (!confirm(`Delete "${node.name}"?`)) return;
     try {
-      await invoke("delete_node", { workspaceRoot: rootPath, id: node.id });
+      await api.deleteNode(node.id);
       removeNode(node.id);
     } catch (e) {
       console.error("delete_node failed:", e);
@@ -287,7 +263,7 @@ function FileTreeNode({
       )}
     </li>
   );
-}
+});
 
 // ── Context menu item ─────────────────────────────────────────────────────────
 

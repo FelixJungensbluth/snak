@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Search, MessageSquare, X } from "lucide-react";
+import * as api from "../api/workspace";
 import { useUiStore } from "../stores/uiStore";
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
 import { useTabStore } from "../stores/tabStore";
@@ -15,10 +15,6 @@ interface FtsResult {
 interface ChatMatch {
   node: WorkspaceNode;
   results: FtsResult[];
-}
-
-interface ChatMessages {
-  messages: { role: string; content: string }[];
 }
 
 export default function ContentSearchOverlay() {
@@ -100,10 +96,7 @@ function ContentSearchInner() {
     }
     debounceRef.current = setTimeout(async () => {
       try {
-        const results = await invoke<FtsResult[]>("search_messages", {
-          query: trimmed,
-          limit: 50,
-        });
+        const results = (await api.searchMessages(trimmed, 50)) as FtsResult[];
         setFtsResults(results);
         setSettledQuery(trimmed);
         setSelectedIdx(0);
@@ -129,10 +122,7 @@ function ContentSearchInner() {
       return;
     }
     let cancelled = false;
-    invoke<ChatMessages>("read_chat_file", {
-      workspaceRoot: rootPath,
-      chatId,
-    })
+    api.readChatFile(chatId)
       .then((data) => {
         if (!cancelled) {
           previewCache.current.set(chatId, data.messages);

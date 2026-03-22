@@ -1,10 +1,10 @@
 import { useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Plus, X } from "lucide-react";
+import * as api from "../api/workspace";
 import { useDroppable } from "@dnd-kit/core";
 import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
-import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
+import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useTabDndState } from "./TabDndContext";
 import TabBar from "./TabBar";
@@ -19,7 +19,7 @@ export default function PaneView({ paneId }: PaneViewProps) {
   const openTab = useTabStore((s) => s.openTab);
   const setFocusedPane = usePaneStore((s) => s.setFocusedPane);
   const closePane = usePaneStore((s) => s.closePane);
-  const root = usePaneStore((s) => s.root);
+  const hasMultiplePanes = usePaneStore((s) => s.root.kind === "split");
   const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
   const rootPath = useWorkspaceStore((s) => s.rootPath);
   const upsertNode = useWorkspaceStore((s) => s.upsertNode);
@@ -28,17 +28,12 @@ export default function PaneView({ paneId }: PaneViewProps) {
   const activeChatId = paneTabs?.activeChatId ?? null;
   const { activeDrag } = useTabDndState();
 
-  const hasMultiplePanes = root.kind === "split";
   const showDropZones = activeDrag !== null;
 
   const handleNewChat = useCallback(async () => {
     if (!rootPath) return;
     try {
-      const node = await invoke<WorkspaceNode>("create_chat", {
-        workspaceRoot: rootPath,
-        provider: defaultProvider,
-        model: defaultModel,
-      });
+      const node = await api.createChat(defaultProvider, defaultModel);
       upsertNode(node);
       openTab(paneId, node.id);
     } catch (e) {

@@ -1,9 +1,9 @@
 import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { usePaneStore, type PaneNode } from "../stores/paneStore";
 import { useTabStore } from "../stores/tabStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import * as api from "../api/workspace";
 
 interface SessionData {
   paneLayout: PaneNode;
@@ -36,9 +36,7 @@ export function useSessionPersist() {
 
     (async () => {
       try {
-        const json = await invoke<string | null>("load_session", {
-          workspaceRoot: rootPath,
-        });
+        const json = await api.loadSession();
         if (!json) {
           setHydrated(true);
           return;
@@ -122,10 +120,8 @@ export function useSessionPersist() {
         scrollPositions,
       };
 
-      invoke("save_session", {
-        workspaceRoot: rootPath,
-        json: JSON.stringify(data),
-      }).catch((e) => console.error("Failed to save session:", e));
+      api.saveSession(JSON.stringify(data))
+        .catch((e) => console.error("Failed to save session:", e));
     };
 
     const debouncedSave = () => {

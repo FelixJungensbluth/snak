@@ -1,12 +1,9 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Send, Square } from "lucide-react";
-import { useChatStore, type Chat, type Message } from "../stores/chatStore";
-import { useWorkspaceStore } from "../stores/workspaceStore";
-import { useSettingsStore } from "../stores/settingsStore";
+import { type Chat, type Message } from "../stores/chatStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useUiStore } from "../stores/uiStore";
+import { useChatEngine } from "../hooks/useChatEngine";
 
 import ModelSelector from "./ModelSelector";
 import MarkdownRenderer from "./MarkdownRenderer";
@@ -17,70 +14,20 @@ interface ChatViewProps {
 }
 
 export default function ChatView({ chatId }: ChatViewProps) {
-  const chat = useChatStore((s) => s.chats[chatId]);
-  const loadChat = useChatStore((s) => s.loadChat);
-  const addMessage = useChatStore((s) => s.addMessage);
-  const appendToken = useChatStore((s) => s.appendToken);
-  const finalizeStream = useChatStore((s) => s.finalizeStream);
-  const setStreaming = useChatStore((s) => s.setStreaming);
-  const rootPath = useWorkspaceStore((s) => s.rootPath);
-  const upsertNode = useWorkspaceStore((s) => s.upsertNode);
-  const renameChat = useChatStore((s) => s.renameChat);
+  const { chat, loading, error, streamError, sendMessage, abort } = useChatEngine(chatId);
+
   const setScrollPosition = useSessionStore((s) => s.setScrollPosition);
   const scrollPositions = useSessionStore((s) => s.scrollPositions);
   const scrollToMessageId = useUiStore((s) => s.scrollToMessageId);
   const setScrollToMessageId = useUiStore((s) => s.setScrollToMessageId);
 
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [streamError, setStreamError] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const isInitialLoad = useRef(true);
   const prevMessageCount = useRef(0);
-
-  // Load chat from .md file if not already in store
-  useEffect(() => {
-    if (chat || !rootPath) return;
-    setLoading(true);
-    setError(null);
-    invoke<{
-      id: string;
-      name: string;
-      provider: string;
-      model: string;
-      messages: { role: string; content: string }[];
-    }>("read_chat_file", { workspaceRoot: rootPath, chatId })
-      .then(async (data) => {
-        const messages: Message[] = data.messages.map((m, i) => ({
-          id: `${chatId}-${i}`,
-          role: m.role as Message["role"],
-          content: m.content,
-          attachments: [],
-          created_at: Date.now(),
-        }));
-        const chatObj: Chat = {
-          id: data.id,
-          name: data.name,
-          provider: data.provider,
-          model: data.model,
-          system_prompt: "",
-          messages,
-          streaming: false,
-          streamBuffer: "",
-          temperature: null,
-          max_tokens: null,
-          created_at: Date.now(),
-          updated_at: Date.now(),
-        };
-        loadChat(chatObj);
-      })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, [chatId, chat, rootPath, loadChat]);
 
   // Restore saved scroll position when switching chats; scroll to bottom on load
   useEffect(() => {
@@ -131,210 +78,34 @@ export default function ChatView({ chatId }: ChatViewProps) {
     return () => cancelAnimationFrame(frame);
   }, [scrollToMessageId, chat, setScrollToMessageId]);
 
-  // Save scroll position on scroll and before unmount / chat switch
+  // Save scroll position on scroll (throttled) and before unmount / chat switch
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
 
+    let scrollTimer: ReturnType<typeof setTimeout> | null = null;
     const onScroll = () => {
-      setScrollPosition(chatId, el.scrollTop);
+      if (scrollTimer) return;
+      scrollTimer = setTimeout(() => {
+        scrollTimer = null;
+        setScrollPosition(chatId, el.scrollTop);
+      }, 150);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
 
     return () => {
       el.removeEventListener("scroll", onScroll);
+      if (scrollTimer) clearTimeout(scrollTimer);
       setScrollPosition(chatId, el.scrollTop);
     };
   }, [chatId, setScrollPosition]);
 
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(() => {
     const text = input.trim();
-    if (!text || !rootPath || !chat) return;
-    if (chat.streaming) return;
-
-    setStreamError(null);
-
-    const userMsg: Message = {
-      id: `${chatId}-${Date.now()}`,
-      role: "user",
-      content: text,
-      attachments: [],
-      created_at: Date.now(),
-    };
-    addMessage(chatId, userMsg);
+    if (!text) return;
     setInput("");
-
-    // Persist user message to .md file and index for FTS
-    try {
-      await invoke("append_message_to_file", {
-        workspaceRoot: rootPath,
-        chatId,
-        role: "user",
-        content: text,
-      });
-      await invoke("index_message", {
-        chatId,
-        msgId: userMsg.id,
-        content: text,
-      });
-    } catch (e) {
-      console.error("Failed to persist message:", e);
-    }
-
-    // Add a placeholder assistant message for streaming into
-    const assistantMsg: Message = {
-      id: `${chatId}-${Date.now()}-streaming`,
-      role: "assistant",
-      content: "",
-      attachments: [],
-      created_at: Date.now(),
-    };
-    addMessage(chatId, assistantMsg);
-    setStreaming(chatId, true);
-
-    // Build messages array for the API (all messages including the new user one)
-    const apiMessages = [...chat.messages, userMsg].map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
-
-    // Set up event listeners before invoking
-    const unlisteners: UnlistenFn[] = [];
-
-    const onToken = await listen<{ chat_id: string; token: string }>(
-      "stream-token",
-      (event) => {
-        if (event.payload.chat_id === chatId) {
-          appendToken(chatId, event.payload.token);
-        }
-      }
-    );
-    unlisteners.push(onToken);
-
-    const isFirstExchange = chat.messages.length === 0;
-
-    const onDone = await listen<{ chat_id: string; full_text: string }>(
-      "stream-done",
-      async (event) => {
-        if (event.payload.chat_id !== chatId) return;
-        const msgId = `${chatId}-${Date.now()}-assistant`;
-        finalizeStream(chatId, event.payload.full_text, msgId);
-
-        // Persist the assistant response to .md file and index for FTS
-        if (event.payload.full_text) {
-          try {
-            await invoke("append_message_to_file", {
-              workspaceRoot: rootPath,
-              chatId,
-              role: "assistant",
-              content: event.payload.full_text,
-            });
-            await invoke("index_message", {
-              chatId,
-              msgId,
-              content: event.payload.full_text,
-            });
-          } catch (e) {
-            console.error("Failed to persist assistant message:", e);
-          }
-        }
-
-        // Auto-title after the first exchange
-        if (isFirstExchange && event.payload.full_text) {
-          const titleSettings = useSettingsStore.getState();
-          const ollamaBaseUrl = titleSettings.providers.ollama?.baseUrl || null;
-          invoke<string>("auto_title_chat", {
-            input: {
-              provider: chat.provider,
-              model: chat.model,
-              messages: [
-                { role: "user", content: text },
-                { role: "assistant", content: event.payload.full_text },
-              ],
-              base_url: chat.provider === "ollama" ? ollamaBaseUrl : null,
-            },
-          })
-            .then(async (title) => {
-              if (!title || title === "New Chat") return;
-              // Update UI immediately
-              renameChat(chatId, title);
-              const nodes = useWorkspaceStore.getState().nodes;
-              const node = nodes.find((n) => n.id === chatId);
-              if (node) upsertNode({ ...node, name: title });
-              // Persist to DB + file
-              try {
-                await invoke("rename_node", { workspaceRoot: rootPath, id: chatId, newName: title });
-              } catch (e) {
-                console.error("Failed to persist chat title:", e);
-              }
-            })
-            .catch((e) => {
-              console.error("Auto-title failed:", e);
-            });
-        }
-
-        // Clean up listeners
-        unlisteners.forEach((fn) => fn());
-      }
-    );
-    unlisteners.push(onDone);
-
-    const onError = await listen<{ chat_id: string; error: string }>(
-      "stream-error",
-      (event) => {
-        if (event.payload.chat_id !== chatId) return;
-        setStreamError(event.payload.error);
-        setStreaming(chatId, false);
-        // Remove the empty placeholder if no tokens arrived
-        const currentChat = useChatStore.getState().chats[chatId];
-        if (currentChat) {
-          const last = currentChat.messages[currentChat.messages.length - 1];
-          if (last && last.role === "assistant" && !last.content) {
-            // Remove empty placeholder by replacing messages
-            useChatStore.setState((state) => {
-              const c = state.chats[chatId];
-              if (c) {
-                c.messages = c.messages.filter((m) => m.id !== last.id);
-              }
-            });
-          }
-        }
-        unlisteners.forEach((fn) => fn());
-      }
-    );
-    unlisteners.push(onError);
-
-    // Invoke the streaming command
-    const settings = useSettingsStore.getState();
-    const ollamaUrl = settings.providers.ollama?.baseUrl || null;
-    const systemPrompt = settings.defaultSystemPrompt || null;
-    try {
-      await invoke("stream_chat", {
-        input: {
-          chat_id: chatId,
-          provider: chat.provider,
-          model: chat.model,
-          messages: apiMessages,
-          system_prompt: systemPrompt,
-          temperature: chat.temperature,
-          max_tokens: chat.max_tokens,
-          base_url: chat.provider === "ollama" ? ollamaUrl : null,
-        },
-      });
-    } catch (e) {
-      setStreamError(String(e));
-      setStreaming(chatId, false);
-      unlisteners.forEach((fn) => fn());
-    }
-  }, [input, chatId, rootPath, chat, addMessage, appendToken, finalizeStream, setStreaming]);
-
-  const handleAbort = useCallback(async () => {
-    try {
-      await invoke("abort_stream", { chatId });
-    } catch (e) {
-      console.error("Failed to abort stream:", e);
-    }
-  }, [chatId]);
+    sendMessage(text);
+  }, [input, sendMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -370,13 +141,13 @@ export default function ChatView({ chatId }: ChatViewProps) {
             No messages yet. Start the conversation below.
           </p>
         )}
-        {chat.messages.map((msg) => (
+        {chat.messages.map((msg, i) => (
           <div key={msg.id} data-msg-id={msg.id}>
             <MessageBubble
               message={msg}
               isStreaming={
                 chat.streaming &&
-                msg === chat.messages[chat.messages.length - 1] &&
+                i === chat.messages.length - 1 &&
                 msg.role === "assistant"
               }
             />
@@ -413,7 +184,7 @@ export default function ChatView({ chatId }: ChatViewProps) {
           />
           {chat.streaming ? (
             <button
-              onClick={handleAbort}
+              onClick={abort}
               className="border-l border-border px-3 text-fg-error hover:text-fg transition-colors self-stretch flex items-end pb-3"
               title="Stop generation"
             >
@@ -479,12 +250,12 @@ function StreamingCursor() {
   );
 }
 
-function TokenCounter({ chat }: { chat: Chat }) {
+const TokenCounter = memo(function TokenCounter({ chat }: { chat: Chat }) {
   const contextLimit = MODEL_CONTEXT_LIMITS[chat.model] ?? 128_000;
 
-  const totalTokens = chat.messages.reduce(
-    (sum, m) => sum + estimateTokens(m.content),
-    0
+  const totalTokens = useMemo(
+    () => chat.messages.reduce((sum, m) => sum + estimateTokens(m.content), 0),
+    [chat.messages],
   );
 
   const pct = Math.min((totalTokens / contextLimit) * 100, 100);
@@ -508,4 +279,4 @@ function TokenCounter({ chat }: { chat: Chat }) {
       </span>
     </div>
   );
-}
+});

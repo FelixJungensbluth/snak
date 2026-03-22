@@ -1,8 +1,8 @@
 import { createRootRoute, Outlet } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 
-import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
+import { useWorkspaceStore } from "../stores/workspaceStore";
+import * as api from "../api/workspace";
 import { useUiStore } from "../stores/uiStore";
 import { useSessionPersist } from "../hooks/useSessionPersist";
 import Onboarding from "../components/Onboarding";
@@ -17,7 +17,10 @@ export const Route = createRootRoute({
 });
 
 function RootComponent() {
-  const { rootPath, setRootPath, setNodes, setLoading } = useWorkspaceStore();
+  const rootPath = useWorkspaceStore((s) => s.rootPath);
+  const setRootPath = useWorkspaceStore((s) => s.setRootPath);
+  const setNodes = useWorkspaceStore((s) => s.setNodes);
+  const setLoading = useWorkspaceStore((s) => s.setLoading);
   const settingsOpen = useUiStore((s) => s.settingsOpen);
   const [initialized, setInitialized] = useState(false);
 
@@ -59,15 +62,15 @@ function RootComponent() {
   useEffect(() => {
     async function restoreWorkspace() {
       try {
-        const savedPath = await invoke<string | null>("get_saved_workspace");
+        const savedPath = await api.getSavedWorkspace();
         if (savedPath) {
           setLoading(true);
-          await invoke("open_workspace", { dbPath: savedPath + "/snak.db" });
-          const nodes = await invoke<WorkspaceNode[]>("list_nodes");
+          await api.openWorkspace(savedPath + "/snak.db");
+          const nodes = await api.listNodes();
           setNodes(nodes);
           setRootPath(savedPath);
           // Rebuild FTS index from all chat files (fire-and-forget)
-          invoke("reindex_all_chats", { workspaceRoot: savedPath }).catch((e) =>
+          api.reindexAllChats(savedPath).catch((e) =>
             console.error("FTS reindex failed:", e)
           );
         }
