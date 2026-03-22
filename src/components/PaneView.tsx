@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { lazy, Suspense, useCallback } from "react";
 import { Plus, X } from "lucide-react";
 import * as api from "../api/workspace";
 import { useDroppable } from "@dnd-kit/core";
@@ -8,7 +8,8 @@ import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useTabDndState } from "./TabDndContext";
 import TabBar from "./TabBar";
-import ChatView from "./ChatView";
+
+const ChatView = lazy(() => import("./ChatView"));
 
 interface PaneViewProps {
   paneId: string;
@@ -63,7 +64,15 @@ export default function PaneView({ paneId }: PaneViewProps) {
       </div>
       <div className="flex-1 overflow-hidden">
         {activeChatId ? (
-          <ChatView chatId={activeChatId} />
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center text-fg-dim text-xs">
+                Loading chat…
+              </div>
+            }
+          >
+            <ChatView chatId={activeChatId} />
+          </Suspense>
         ) : (
           <div className="flex flex-col items-center justify-center h-full gap-3">
             <button

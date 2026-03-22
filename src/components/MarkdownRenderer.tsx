@@ -5,6 +5,8 @@ import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import { Copy, Check } from "lucide-react";
+import "katex/dist/katex.min.css";
+import "highlight.js/styles/github-dark.min.css";
 
 // Stable plugin arrays — avoids re-creating on every render
 const REMARK_PLUGINS = [remarkMath, remarkGfm];

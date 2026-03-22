@@ -10,6 +10,24 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [tailwindcss(), TanStackRouterVite(), react()],
 
+  // Split heavy deps into separate chunks so the initial bundle is smaller
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          markdown: [
+            "react-markdown",
+            "remark-math",
+            "remark-gfm",
+            "rehype-katex",
+            "rehype-highlight",
+          ],
+          katex: ["katex"],
+          dndkit: ["@dnd-kit/core", "@dnd-kit/sortable", "@dnd-kit/utilities"],
+        },
+      },
+    },
+  },
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

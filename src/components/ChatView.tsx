@@ -9,9 +9,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import * as api from "../api/workspace";
 
+import { lazy, Suspense } from "react";
 import ModelSelector from "./ModelSelector";
-import MarkdownRenderer from "./MarkdownRenderer";
 import { MODEL_CONTEXT_LIMITS, estimateTokens } from "../providers";
+
+const MarkdownRenderer = lazy(() => import("./MarkdownRenderer"));
 
 interface ChatViewProps {
   chatId: string;
@@ -427,7 +429,9 @@ const MessageBubble = memo(function MessageBubble({
 
         {isAssistant ? (
           <>
-            <MarkdownRenderer content={displayContent} />
+            <Suspense fallback={<span className="whitespace-pre-wrap">{displayContent}</span>}>
+              <MarkdownRenderer content={displayContent} />
+            </Suspense>
             {isStreaming && <StreamingCursor />}
           </>
         ) : isUser ? (

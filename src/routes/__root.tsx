@@ -1,16 +1,13 @@
-import { createRootRoute, Outlet } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { createRootRoute } from "@tanstack/react-router";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import * as api from "../api/workspace";
 import { useUiStore } from "../stores/uiStore";
 import { useSessionPersist } from "../hooks/useSessionPersist";
-import Onboarding from "../components/Onboarding";
-import Sidebar from "../components/Sidebar";
-import SettingsPanel from "../components/SettingsPanel";
-import ChatFinderOverlay from "../components/SearchOverlay";
-import ContentSearchOverlay from "../components/ContentSearch";
-import { TabDndProvider } from "../components/TabDndContext";
+
+const Onboarding = lazy(() => import("../components/Onboarding"));
+const WorkspaceChrome = lazy(() => import("../components/WorkspaceChrome"));
 
 export const Route = createRootRoute({
   component: RootComponent,
@@ -21,7 +18,6 @@ function RootComponent() {
   const setRootPath = useWorkspaceStore((s) => s.setRootPath);
   const setNodes = useWorkspaceStore((s) => s.setNodes);
   const setLoading = useWorkspaceStore((s) => s.setLoading);
-  const settingsOpen = useUiStore((s) => s.settingsOpen);
   const [initialized, setInitialized] = useState(false);
 
   // Session persistence (save/restore pane layout, tabs, scroll positions)
@@ -60,6 +56,25 @@ function RootComponent() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    let idleHandle: number | null = null;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+    function scheduleDeferredReindex(savedPath: string) {
+      const startReindex = () => {
+        if (cancelled) return;
+        api.reindexAllChats(savedPath).catch((e) =>
+          console.error("FTS reindex failed:", e)
+        );
+      };
+
+      if (typeof window.requestIdleCallback === "function") {
+        idleHandle = window.requestIdleCallback(startReindex);
+      } else {
+        timeoutHandle = setTimeout(startReindex, 1200);
+      }
+    }
+
     async function restoreWorkspace() {
       try {
         const savedPath = await api.getSavedWorkspace();
@@ -69,10 +84,7 @@ function RootComponent() {
           const nodes = await api.listNodes();
           setNodes(nodes);
           setRootPath(savedPath);
-          // Rebuild FTS index from all chat files (fire-and-forget)
-          api.reindexAllChats(savedPath).catch((e) =>
-            console.error("FTS reindex failed:", e)
-          );
+          scheduleDeferredReindex(savedPath);
         }
       } catch (e) {
         console.error("Failed to restore workspace:", e);
@@ -82,7 +94,15 @@ function RootComponent() {
       }
     }
     restoreWorkspace();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+      if (idleHandle !== null && typeof window.cancelIdleCallback === "function") {
+        window.cancelIdleCallback(idleHandle);
+      }
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    };
   }, []);
 
   if (!initialized) {
@@ -94,19 +114,22 @@ function RootComponent() {
   }
 
   if (!rootPath) {
-    return <Onboarding />;
+    return (
+      <Suspense fallback={null}>
+        <Onboarding />
+      </Suspense>
+    );
   }
 
   return (
-    <TabDndProvider>
-      <div className="flex h-screen overflow-hidden relative border-t border-border">
-        <Sidebar />
-        <main className="flex-1 overflow-hidden bg-bg">
-          {settingsOpen ? <SettingsPanel /> : <Outlet />}
-        </main>
-        <ChatFinderOverlay />
-        <ContentSearchOverlay />
-      </div>
-    </TabDndProvider>
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center h-screen text-fg-dim text-xs">
+          Loading workspace…
+        </div>
+      }
+    >
+      <WorkspaceChrome />
+    </Suspense>
   );
 }

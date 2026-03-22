@@ -732,12 +732,20 @@ pub fn load_session(workspace_root: String) -> Result<Option<String>, String> {
 /// Rebuild the FTS index from all chat `.md` files on disk.
 /// Clears the existing index first to avoid duplicates.
 #[tauri::command]
-pub fn reindex_all_chats(
-    workspace_root: String,
-    state: State<'_, DbState>,
-) -> Result<usize, String> {
-    let guard = state.0.lock().unwrap();
-    let conn = guard.as_ref().ok_or("No workspace open")?;
+pub async fn reindex_all_chats(workspace_root: String) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || reindex_all_chats_inner(&workspace_root))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn reindex_all_chats_inner(workspace_root: &str) -> Result<usize, String> {
+    let db_path = Path::new(workspace_root).join("snak.db");
+    let conn = db::open_workspace_db(
+        db_path
+            .to_str()
+            .ok_or("Workspace database path contains invalid UTF-8")?,
+    )
+    .map_err(|e| e.to_string())?;
 
     // Clear existing FTS index
     conn.execute("DELETE FROM messages_fts", [])
@@ -756,7 +764,7 @@ pub fn reindex_all_chats(
     let mut total_indexed: usize = 0;
 
     for (chat_id, parent_id) in &chats {
-        let dir = node_dir_for_parent(&workspace_root, parent_id.as_deref(), conn)?;
+        let dir = node_dir_for_parent(workspace_root, parent_id.as_deref(), &conn)?;
         let file_path = dir.join(format!("{chat_id}.md"));
         let raw = match fs::read_to_string(&file_path) {
             Ok(r) => r,
@@ -786,7 +794,7 @@ pub fn reindex_all_chats(
                     let content = current_content.trim().to_string();
                     if !content.is_empty() {
                         let msg_id = format!("{chat_id}-{msg_idx}");
-                        let _ = db::index_message(conn, &content, chat_id, &msg_id);
+                        let _ = db::index_message(&conn, &content, chat_id, &msg_id);
                         total_indexed += 1;
                         msg_idx += 1;
                     }
@@ -803,7 +811,7 @@ pub fn reindex_all_chats(
             let content = current_content.trim().to_string();
             if !content.is_empty() {
                 let msg_id = format!("{chat_id}-{msg_idx}");
-                let _ = db::index_message(conn, &content, chat_id, &msg_id);
+                let _ = db::index_message(&conn, &content, chat_id, &msg_id);
                 total_indexed += 1;
             }
         }
