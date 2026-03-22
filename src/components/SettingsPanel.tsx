@@ -1,15 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, KeyRound, Check, Trash2, Globe } from "lucide-react";
+import { KeyRound, Check, Trash2, Globe, X } from "lucide-react";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useUiStore } from "../stores/uiStore";
 import { PROVIDERS, PROVIDER_MODELS } from "../providers";
 
-interface SettingsPanelProps {
-  open: boolean;
-  onClose: () => void;
-}
-
-export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
+export default function SettingsPanel() {
   const {
     defaultProvider,
     defaultTemperature,
@@ -92,28 +88,25 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const selectedKey = keys[selectedProviderId] || "";
   const selectedSaved = saved[selectedProviderId] || false;
 
+  const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
+
   return (
-    <aside
-      aria-hidden={!open}
-      className={`h-full bg-surface border-l border-border overflow-hidden transition-all duration-200 ${
-        open ? "w-[360px] opacity-100" : "w-0 opacity-0 pointer-events-none"
-      }`}
-    >
-      <div className="flex flex-col h-full w-[360px]">
+    <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-3 px-5 py-3 border-b border-border shrink-0">
+      <div className="flex items-center px-4 h-[35px] border-b border-border shrink-0">
+        <h1 className="text-xs font-medium text-fg flex-1">Settings</h1>
         <button
-          onClick={onClose}
-          className="text-fg-muted hover:text-fg transition-colors"
+          onClick={() => setSettingsOpen(false)}
+          className="p-1 text-fg-muted hover:text-fg hover:bg-surface-hover rounded transition-colors"
+          title="Close settings"
         >
-          <ArrowLeft size={15} />
+          <X size={14} />
         </button>
-        <h1 className="text-sm font-medium text-fg">Settings</h1>
       </div>
 
       {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-[520px] mx-auto px-5 py-6 space-y-8">
+      <div className="flex-1 overflow-y-auto px-4 py-6">
+        <div className="max-w-[520px] mx-auto space-y-8">
           {/* ── Provider ──────────────────────────────────────────────── */}
           <section>
             <h2 className="text-xs font-medium text-fg uppercase tracking-wider mb-4">
@@ -305,7 +298,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </section>}
         </div>
       </div>
-      </div>
-    </aside>
+    </div>
   );
 }

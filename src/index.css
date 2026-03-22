@@ -130,3 +130,25 @@
     overflow-x: auto;
   }
 }
+
+/* Search result snippet: highlight <mark> tags from FTS5 */
+.search-snippet mark {
+  background-color: var(--color-accent);
+  color: var(--color-fg);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* Flash highlight when scrolling to a message from search */
+.search-highlight {
+  animation: search-flash 2s ease-out;
+}
+
+@keyframes search-flash {
+  0% {
+    background-color: rgba(14, 99, 156, 0.3);
+  }
+  100% {
+    background-color: transparent;
+  }
+}

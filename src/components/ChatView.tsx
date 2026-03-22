@@ -6,7 +6,8 @@ import { useChatStore, type Chat, type Message } from "../stores/chatStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useSessionStore } from "../stores/sessionStore";
-import ChatSettings from "./ChatSettings";
+import { useUiStore } from "../stores/uiStore";
+
 import ModelSelector from "./ModelSelector";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { MODEL_CONTEXT_LIMITS, estimateTokens } from "../providers";
@@ -27,6 +28,8 @@ export default function ChatView({ chatId }: ChatViewProps) {
   const renameChat = useChatStore((s) => s.renameChat);
   const setScrollPosition = useSessionStore((s) => s.setScrollPosition);
   const scrollPositions = useSessionStore((s) => s.scrollPositions);
+  const scrollToMessageId = useUiStore((s) => s.scrollToMessageId);
+  const setScrollToMessageId = useUiStore((s) => s.setScrollToMessageId);
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -51,7 +54,7 @@ export default function ChatView({ chatId }: ChatViewProps) {
       model: string;
       messages: { role: string; content: string }[];
     }>("read_chat_file", { workspaceRoot: rootPath, chatId })
-      .then((data) => {
+      .then(async (data) => {
         const messages: Message[] = data.messages.map((m, i) => ({
           id: `${chatId}-${i}`,
           role: m.role as Message["role"],
@@ -109,6 +112,25 @@ export default function ChatView({ chatId }: ChatViewProps) {
     prevMessageCount.current = chat.messages.length;
   }, [chatId, chat?.messages.length, chat?.streaming, chat?.streamBuffer]);
 
+  // Scroll to a specific message when navigating from search
+  useEffect(() => {
+    if (!scrollToMessageId || !chat || !scrollRef.current) return;
+    // Defer to next frame so messages are rendered
+    const frame = requestAnimationFrame(() => {
+      const el = scrollRef.current?.querySelector(
+        `[data-msg-id="${scrollToMessageId}"]`
+      ) as HTMLElement | null;
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        // Flash highlight
+        el.classList.add("search-highlight");
+        setTimeout(() => el.classList.remove("search-highlight"), 2000);
+      }
+      setScrollToMessageId(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [scrollToMessageId, chat, setScrollToMessageId]);
+
   // Save scroll position on scroll and before unmount / chat switch
   useEffect(() => {
     const el = scrollRef.current;
@@ -142,12 +164,17 @@ export default function ChatView({ chatId }: ChatViewProps) {
     addMessage(chatId, userMsg);
     setInput("");
 
-    // Persist user message to .md file
+    // Persist user message to .md file and index for FTS
     try {
       await invoke("append_message_to_file", {
         workspaceRoot: rootPath,
         chatId,
         role: "user",
+        content: text,
+      });
+      await invoke("index_message", {
+        chatId,
+        msgId: userMsg.id,
         content: text,
       });
     } catch (e) {
@@ -193,13 +220,18 @@ export default function ChatView({ chatId }: ChatViewProps) {
         const msgId = `${chatId}-${Date.now()}-assistant`;
         finalizeStream(chatId, event.payload.full_text, msgId);
 
-        // Persist the assistant response to .md file
+        // Persist the assistant response to .md file and index for FTS
         if (event.payload.full_text) {
           try {
             await invoke("append_message_to_file", {
               workspaceRoot: rootPath,
               chatId,
               role: "assistant",
+              content: event.payload.full_text,
+            });
+            await invoke("index_message", {
+              chatId,
+              msgId,
               content: event.payload.full_text,
             });
           } catch (e) {
@@ -339,15 +371,16 @@ export default function ChatView({ chatId }: ChatViewProps) {
           </p>
         )}
         {chat.messages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            isStreaming={
-              chat.streaming &&
-              msg === chat.messages[chat.messages.length - 1] &&
-              msg.role === "assistant"
-            }
-          />
+          <div key={msg.id} data-msg-id={msg.id}>
+            <MessageBubble
+              message={msg}
+              isStreaming={
+                chat.streaming &&
+                msg === chat.messages[chat.messages.length - 1] &&
+                msg.role === "assistant"
+              }
+            />
+          </div>
         ))}
         {streamError && (
           <div className="flex justify-start">
@@ -366,7 +399,6 @@ export default function ChatView({ chatId }: ChatViewProps) {
       <div className="border-t border-border bg-surface relative">
         <div className="flex items-center gap-2 px-3 pt-2">
           <ModelSelector chatId={chatId} />
-          <ChatSettings chatId={chatId} />
         </div>
         <div className="flex items-end">
           <textarea

@@ -9,8 +9,8 @@ use commands::streaming::{abort_stream, auto_title_chat, stream_chat, StreamStat
 use commands::workspace::{
     append_message_to_file, archive_node, create_chat, create_folder, db_health, delete_node,
     get_saved_workspace, index_message, insert_node, list_nodes, load_session, move_node,
-    open_workspace, read_chat_file, rename_node, save_session, save_workspace, search_messages,
-    update_chat_model_config, DbState,
+    open_workspace, read_chat_file, reindex_all_chats, rename_node, save_session, save_workspace,
+    search_messages, update_chat_model_config, DbState,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -28,6 +28,7 @@ pub fn run() {
             insert_node,
             index_message,
             search_messages,
+            reindex_all_chats,
             list_nodes,
             create_chat,
             create_folder,

@@ -729,6 +729,89 @@ pub fn load_session(workspace_root: String) -> Result<Option<String>, String> {
 
 // ── FTS ──────────────────────────────────────────────────────────────────────
 
+/// Rebuild the FTS index from all chat `.md` files on disk.
+/// Clears the existing index first to avoid duplicates.
+#[tauri::command]
+pub fn reindex_all_chats(
+    workspace_root: String,
+    state: State<'_, DbState>,
+) -> Result<usize, String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+
+    // Clear existing FTS index
+    conn.execute("DELETE FROM messages_fts", [])
+        .map_err(|e| e.to_string())?;
+
+    // Get all chat nodes
+    let mut stmt = conn
+        .prepare("SELECT id, parent_id FROM nodes WHERE type = 'chat' AND is_archived = 0")
+        .map_err(|e| e.to_string())?;
+    let chats: Vec<(String, Option<String>)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut total_indexed: usize = 0;
+
+    for (chat_id, parent_id) in &chats {
+        let dir = node_dir_for_parent(&workspace_root, parent_id.as_deref(), conn)?;
+        let file_path = dir.join(format!("{chat_id}.md"));
+        let raw = match fs::read_to_string(&file_path) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        // Skip frontmatter
+        let body = if raw.starts_with("---") {
+            if let Some(end) = raw[3..].find("---") {
+                &raw[3 + end + 3..]
+            } else {
+                raw.as_str()
+            }
+        } else {
+            raw.as_str()
+        };
+
+        // Parse message blocks
+        let mut current_role: Option<String> = None;
+        let mut current_content = String::new();
+        let mut msg_idx: usize = 0;
+
+        for line in body.lines() {
+            let trimmed = line.trim();
+            if trimmed == "## user" || trimmed == "## assistant" || trimmed == "## system" {
+                if let Some(_role) = current_role.take() {
+                    let content = current_content.trim().to_string();
+                    if !content.is_empty() {
+                        let msg_id = format!("{chat_id}-{msg_idx}");
+                        let _ = db::index_message(conn, &content, chat_id, &msg_id);
+                        total_indexed += 1;
+                        msg_idx += 1;
+                    }
+                }
+                current_role = Some(trimmed[3..].to_string());
+                current_content.clear();
+            } else if current_role.is_some() {
+                current_content.push_str(line);
+                current_content.push('\n');
+            }
+        }
+        // Flush last message
+        if let Some(_role) = current_role {
+            let content = current_content.trim().to_string();
+            if !content.is_empty() {
+                let msg_id = format!("{chat_id}-{msg_idx}");
+                let _ = db::index_message(conn, &content, chat_id, &msg_id);
+                total_indexed += 1;
+            }
+        }
+    }
+
+    Ok(total_indexed)
+}
+
 /// Index a message in the FTS table.
 #[tauri::command]
 pub fn index_message(

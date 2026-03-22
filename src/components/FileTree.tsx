@@ -210,10 +210,10 @@ function FileTreeNode({
   return (
     <li ref={setNodeRef} style={style}>
       <div
-        className={`flex items-center h-[22px] cursor-pointer hover:bg-surface-hover select-none group ${
+        className={`flex items-center h-[26px] cursor-pointer hover:bg-surface-hover/70 select-none group mx-1.5 rounded ${
           isDropTarget ? "bg-accent-selection ring-1 ring-accent ring-inset" : ""
         }`}
-        style={{ paddingLeft: `${pl}px` }}
+        style={{ paddingLeft: `${Math.max(pl - 6, 4)}px` }}
         onClick={() => {
           if (isFolder) {
             setExpanded((p) => !p);
@@ -276,12 +276,12 @@ function FileTreeNode({
       {ctxMenu && (
         <div
           ref={ctxMenuRef}
-          className="fixed z-50 bg-surface-raised border border-border-strong rounded shadow-xl py-0.5 min-w-[140px]"
+          className="fixed z-50 bg-surface-raised border border-border-strong rounded-lg shadow-2xl py-1 min-w-[140px]"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
         >
           <CtxItem icon={<Pencil size={12} />} label="Rename" onClick={startRename} />
           <CtxItem icon={<Archive size={12} />} label="Archive" onClick={handleArchive} />
-          <div className="my-0.5 border-t border-border-strong" />
+          <div className="mx-2 my-1 border-t border-border" />
           <CtxItem icon={<Trash2 size={12} />} label="Delete" onClick={handleDelete} danger />
         </div>
       )}
@@ -304,15 +304,16 @@ function CtxItem({
 }) {
   return (
     <button
-      className={`w-full text-left px-3 py-1 text-xs flex items-center gap-2 hover:bg-accent-selection transition-colors ${
+      className={`w-full text-left px-2.5 py-1.5 text-xs flex items-center gap-2.5 hover:bg-surface-hover rounded-md mx-0.5 transition-colors ${
         danger ? "text-fg-error" : "text-fg"
       }`}
+      style={{ width: "calc(100% - 4px)" }}
       onMouseDown={(e) => {
         e.preventDefault();
         onClick();
       }}
     >
-      {icon}
+      <span className={danger ? "text-fg-error" : "text-fg-muted"}>{icon}</span>
       {label}
     </button>
   );

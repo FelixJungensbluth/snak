@@ -28,7 +28,7 @@ export default function ChatSettings({ chatId }: ChatSettingsProps) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-40 bg-surface-raised border border-border-strong rounded shadow-xl p-3 w-[220px]">
+        <div className="absolute right-0 bottom-full mb-1 z-40 bg-surface-raised border border-border-strong rounded-lg shadow-2xl p-3 w-[220px]">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[11px] text-fg-muted font-medium">
               Chat Settings

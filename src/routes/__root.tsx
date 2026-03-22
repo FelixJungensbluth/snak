@@ -1,13 +1,15 @@
 import { createRootRoute, Outlet } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Settings } from "lucide-react";
+
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
 import { useUiStore } from "../stores/uiStore";
 import { useSessionPersist } from "../hooks/useSessionPersist";
 import Onboarding from "../components/Onboarding";
 import Sidebar from "../components/Sidebar";
 import SettingsPanel from "../components/SettingsPanel";
+import ChatFinderOverlay from "../components/SearchOverlay";
+import ContentSearchOverlay from "../components/ContentSearch";
 import { TabDndProvider } from "../components/TabDndContext";
 
 export const Route = createRootRoute({
@@ -17,11 +19,42 @@ export const Route = createRootRoute({
 function RootComponent() {
   const { rootPath, setRootPath, setNodes, setLoading } = useWorkspaceStore();
   const settingsOpen = useUiStore((s) => s.settingsOpen);
-  const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
   const [initialized, setInitialized] = useState(false);
 
   // Session persistence (save/restore pane layout, tabs, scroll positions)
   useSessionPersist();
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const mod = e.metaKey || e.ctrlKey;
+      const ui = useUiStore.getState();
+
+      // Cmd+P or Cmd+K — Chat finder (find files)
+      if (mod && (e.key === "p" || e.key === "k") && !e.shiftKey) {
+        e.preventDefault();
+        if (ui.chatFinderOpen) {
+          ui.closeChatFinder();
+        } else {
+          ui.openChatFinder();
+        }
+        return;
+      }
+
+      // Cmd+Shift+F — Content search (grep messages)
+      if (mod && e.shiftKey && e.key === "f") {
+        e.preventDefault();
+        if (ui.contentSearchOpen) {
+          ui.closeContentSearch();
+        } else {
+          ui.openContentSearch();
+        }
+        return;
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   useEffect(() => {
     async function restoreWorkspace() {
@@ -33,6 +66,10 @@ function RootComponent() {
           const nodes = await invoke<WorkspaceNode[]>("list_nodes");
           setNodes(nodes);
           setRootPath(savedPath);
+          // Rebuild FTS index from all chat files (fire-and-forget)
+          invoke("reindex_all_chats", { workspaceRoot: savedPath }).catch((e) =>
+            console.error("FTS reindex failed:", e)
+          );
         }
       } catch (e) {
         console.error("Failed to restore workspace:", e);
@@ -59,22 +96,13 @@ function RootComponent() {
 
   return (
     <TabDndProvider>
-      <div className="flex h-screen overflow-hidden relative">
+      <div className="flex h-screen overflow-hidden relative border-t border-border">
         <Sidebar />
         <main className="flex-1 overflow-hidden bg-bg">
-          <Outlet />
+          {settingsOpen ? <SettingsPanel /> : <Outlet />}
         </main>
-        {!settingsOpen && (
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="absolute top-3 right-3 z-30 p-1 text-fg-muted hover:text-fg transition-colors"
-            title="Settings"
-            aria-label="Open settings"
-          >
-            <Settings size={14} />
-          </button>
-        )}
-        <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        <ChatFinderOverlay />
+        <ContentSearchOverlay />
       </div>
     </TabDndProvider>
   );

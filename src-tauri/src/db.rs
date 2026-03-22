@@ -182,6 +182,34 @@ pub fn search_messages(
     query: &str,
     limit: usize,
 ) -> Result<Vec<FtsResult>> {
+    // Sanitize: strip FTS5 special chars, split into tokens, add prefix '*' to last token
+    let tokens: Vec<String> = query
+        .split_whitespace()
+        .map(|t| {
+            t.chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<String>()
+        })
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    if tokens.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Build FTS5 query: exact tokens + prefix on last token for as-you-type feel
+    let fts_query = if tokens.len() == 1 {
+        format!("\"{}\"*", tokens[0])
+    } else {
+        let last = tokens.len() - 1;
+        tokens
+            .iter()
+            .enumerate()
+            .map(|(i, t)| if i == last { format!("\"{}\"*", t) } else { format!("\"{}\"", t) })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
     let mut stmt = conn.prepare(
         "SELECT chat_id, msg_id,
                 snippet(messages_fts, 0, '<mark>', '</mark>', '…', 20) AS snippet
@@ -190,7 +218,7 @@ pub fn search_messages(
          ORDER BY rank
          LIMIT ?2",
     )?;
-    let rows = stmt.query_map(params![query, limit as i64], |row| {
+    let rows = stmt.query_map(params![fts_query, limit as i64], |row| {
         Ok(FtsResult {
             chat_id: row.get(0)?,
             msg_id: row.get(1)?,
