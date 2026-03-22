@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Plus, FolderPlus } from "lucide-react";
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import FileTree from "./FileTree";
 
 const MIN_WIDTH = 140;
@@ -9,6 +10,8 @@ const MAX_WIDTH = 480;
 
 export default function Sidebar() {
   const { nodes, rootPath, upsertNode } = useWorkspaceStore();
+  const defaultProvider = useSettingsStore((s) => s.defaultProvider);
+  const defaultModel = useSettingsStore((s) => s.defaultModel);
   const [width, setWidth] = useState(208);
   const [creating, setCreating] = useState(false);
   const [bgCtxMenu, setBgCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -49,10 +52,16 @@ export default function Sidebar() {
     setBgCtxMenu(null);
     setCreating(true);
     try {
-      const node = await invoke<WorkspaceNode>(
-        nodeType === "chat" ? "create_chat" : "create_folder",
-        { workspaceRoot: rootPath },
-      );
+      const node =
+        nodeType === "chat"
+          ? await invoke<WorkspaceNode>("create_chat", {
+              workspaceRoot: rootPath,
+              provider: defaultProvider,
+              model: defaultModel,
+            })
+          : await invoke<WorkspaceNode>("create_folder", {
+              workspaceRoot: rootPath,
+            });
       upsertNode(node);
     } catch (e) {
       console.error(`create ${nodeType} failed:`, e);
@@ -80,7 +89,7 @@ export default function Sidebar() {
 
   return (
     <aside
-      className="flex-shrink-0 bg-surface flex h-screen relative"
+      className="flex-shrink-0 bg-surface flex flex-col h-screen relative"
       style={{ width: `${width}px` }}
     >
       {/* scrollable tree area */}

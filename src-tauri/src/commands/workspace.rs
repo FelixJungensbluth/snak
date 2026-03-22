@@ -481,6 +481,79 @@ pub fn append_message_to_file(
     Ok(())
 }
 
+/// Persist provider/model changes for an existing chat in both file frontmatter and DB.
+#[tauri::command]
+pub fn update_chat_model_config(
+    workspace_root: String,
+    chat_id: String,
+    provider: String,
+    model: String,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+
+    let parent_id: Option<String> = conn
+        .query_row(
+            "SELECT parent_id FROM nodes WHERE id = ?1",
+            rusqlite::params![chat_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let dir = node_dir_for_parent(&workspace_root, parent_id.as_deref(), conn)?;
+    let file_path = dir.join(format!("{chat_id}.md"));
+    let raw = fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
+
+    if !raw.starts_with("---") {
+        return Err("Chat file missing frontmatter".to_string());
+    }
+
+    let end = raw[3..]
+        .find("---")
+        .ok_or("Chat file has invalid frontmatter")?;
+    let fm = &raw[3..3 + end];
+    let body = &raw[3 + end + 3..];
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut has_provider = false;
+    let mut has_model = false;
+    for line in fm.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("provider:") {
+            lines.push(format!("provider: {provider}"));
+            has_provider = true;
+        } else if trimmed.starts_with("model:") {
+            lines.push(format!("model: {model}"));
+            has_model = true;
+        } else {
+            lines.push(trimmed.to_string());
+        }
+    }
+    if !has_provider {
+        lines.push(format!("provider: {provider}"));
+    }
+    if !has_model {
+        lines.push(format!("model: {model}"));
+    }
+
+    let updated = format!("---\n{}\n---{}", lines.join("\n"), body);
+    fs::write(&file_path, updated).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE nodes
+         SET provider = ?1, model = ?2, updated_at = strftime('%s','now') * 1000
+         WHERE id = ?3",
+        rusqlite::params![provider, model, chat_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 // ── FTS ──────────────────────────────────────────────────────────────────────
 
 /// Index a message in the FTS table.

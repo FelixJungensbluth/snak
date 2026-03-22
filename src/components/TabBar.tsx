@@ -26,7 +26,8 @@ export default function TabBar({ paneId }: TabBarProps) {
   if (chatIds.length === 0) return null;
 
   return (
-    <div className="flex items-end bg-surface border-b border-border h-[35px] overflow-x-auto">
+    <div className="flex items-end bg-surface border-b border-border h-[35px]">
+      <div className="flex items-end flex-1 overflow-x-auto">
       {chatIds.map((chatId) => {
         const node = nodeMap.get(chatId);
         const name = node?.name ?? "Untitled";
@@ -56,6 +57,7 @@ export default function TabBar({ paneId }: TabBarProps) {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

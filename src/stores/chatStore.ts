@@ -84,19 +84,23 @@ export const useChatStore = create<ChatState & ChatActions>()(
         const chat = state.chats[chatId];
         if (!chat) return;
         chat.streamBuffer += token;
+        // Update the last message (the streaming assistant placeholder) in real time
+        const last = chat.messages[chat.messages.length - 1];
+        if (last && last.role === "assistant") {
+          last.content = chat.streamBuffer;
+        }
       }),
 
     finalizeStream: (chatId, finalContent, msgId) =>
       set((state) => {
         const chat = state.chats[chatId];
         if (!chat) return;
-        chat.messages.push({
-          id: msgId,
-          role: "assistant",
-          content: finalContent,
-          attachments: [],
-          created_at: Date.now(),
-        });
+        // Update the existing streaming placeholder message with final content
+        const last = chat.messages[chat.messages.length - 1];
+        if (last && last.role === "assistant") {
+          last.id = msgId;
+          last.content = finalContent;
+        }
         chat.streamBuffer = "";
         chat.streaming = false;
         chat.updated_at = Date.now();
