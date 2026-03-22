@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Send, Square, Paperclip, X, FileText, FileCode, Bot, User } from "lucide-react";
 import { type Chat, type Message, type Attachment } from "../stores/chatStore";
+import { useChatDraftStore } from "../stores/chatDraftStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useUiStore } from "../stores/uiStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
@@ -12,6 +13,10 @@ import * as api from "../api/workspace";
 import { lazy, Suspense } from "react";
 import ModelSelector from "./ModelSelector";
 import { MODEL_CONTEXT_LIMITS, estimateTokens } from "../providers";
+import {
+  getActiveMentionQuery,
+  replaceMentionAtRange,
+} from "../utils/fileNodes";
 
 const MarkdownRenderer = lazy(() => import("./MarkdownRenderer"));
 
@@ -43,15 +48,25 @@ function classifyFile(name: string): PendingAttachment["type"] | null {
 export default function ChatView({ chatId }: ChatViewProps) {
   const { chat, loading, error, streamError, sendMessage, abort } = useChatEngine(chatId);
 
+  const input = useChatDraftStore((s) => s.drafts[chatId] ?? "");
+  const setDraft = useChatDraftStore((s) => s.setDraft);
+  const clearDraft = useChatDraftStore((s) => s.clearDraft);
   const setScrollPosition = useSessionStore((s) => s.setScrollPosition);
   const scrollPositions = useSessionStore((s) => s.scrollPositions);
   const scrollToMessageId = useUiStore((s) => s.scrollToMessageId);
   const setScrollToMessageId = useUiStore((s) => s.setScrollToMessageId);
+  const fileNodes = useWorkspaceStore((s) => s.index.fileNodes);
 
-  const [input, setInput] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionRange, setMentionRange] = useState<{
+    start: number;
+    end: number;
+    query: string;
+  } | null>(null);
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -131,6 +146,23 @@ export default function ChatView({ chatId }: ChatViewProps) {
 
   // ── Attachment handling ──────────────────────────────────────────────────
 
+  const updateMentionState = useCallback((value: string, cursor?: number | null) => {
+    const textarea = inputRef.current;
+    const nextCursor = cursor ?? textarea?.selectionStart ?? value.length;
+    const activeMention = getActiveMentionQuery(value, nextCursor);
+    setMentionRange(activeMention);
+    setMentionIndex(0);
+  }, []);
+
+  const mentionSuggestions = useMemo(() => {
+    if (!mentionRange) return [];
+    const query = mentionRange.query.trim().toLowerCase();
+    const filtered = query
+      ? fileNodes.filter((node) => node.name.toLowerCase().includes(query))
+      : fileNodes;
+    return filtered.slice(0, 8);
+  }, [fileNodes, mentionRange]);
+
   const addFiles = useCallback(async (paths: string[]) => {
     const newAttachments: PendingAttachment[] = [];
     for (const path of paths) {
@@ -181,11 +213,20 @@ export default function ChatView({ chatId }: ChatViewProps) {
     const webview = getCurrentWebview();
     const unlisten = webview.onDragDropEvent((event) => {
       if (event.payload.type === "over") {
-        setDragOver(true);
+        const x = event.payload.position.x / (window.devicePixelRatio || 1);
+        const y = event.payload.position.y / (window.devicePixelRatio || 1);
+        const dropTarget = document.elementFromPoint(x, y);
+        const isInsideChat = !!dropTarget && !!rootRef.current?.contains(dropTarget);
+        setDragOver(isInsideChat);
       } else if (event.payload.type === "leave") {
         setDragOver(false);
       } else if (event.payload.type === "drop") {
+        const x = event.payload.position.x / (window.devicePixelRatio || 1);
+        const y = event.payload.position.y / (window.devicePixelRatio || 1);
+        const dropTarget = document.elementFromPoint(x, y);
+        const isInsideChat = !!dropTarget && !!rootRef.current?.contains(dropTarget);
         setDragOver(false);
+        if (!isInsideChat) return;
         const paths = event.payload.paths;
         if (paths && paths.length > 0) {
           addFilesRef.current(paths);
@@ -207,12 +248,51 @@ export default function ChatView({ chatId }: ChatViewProps) {
       path: a.path,
       name: a.name,
     }));
-    setInput("");
+    clearDraft(chatId);
     setPendingAttachments([]);
     sendMessage(text, attachments);
-  }, [input, pendingAttachments, sendMessage]);
+    setMentionRange(null);
+    setMentionIndex(0);
+  }, [chatId, clearDraft, input, pendingAttachments, sendMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (mentionSuggestions.length > 0 && mentionRange) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const selected = mentionSuggestions[mentionIndex];
+        if (selected) {
+          const { nextValue, nextCursor } = replaceMentionAtRange(
+            input,
+            mentionRange.start,
+            mentionRange.end,
+            selected.name,
+          );
+          setDraft(chatId, nextValue);
+          setMentionRange(null);
+          requestAnimationFrame(() => {
+            inputRef.current?.focus();
+            inputRef.current?.setSelectionRange(nextCursor, nextCursor);
+          });
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMentionRange(null);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -238,7 +318,7 @@ export default function ChatView({ chatId }: ChatViewProps) {
   if (!chat) return null;
 
   return (
-    <div className="flex flex-col h-full">
+    <div ref={rootRef} className="flex flex-col h-full">
       {/* Message list */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
         {chat.messages.length === 0 && (
@@ -296,6 +376,37 @@ export default function ChatView({ chatId }: ChatViewProps) {
           </div>
         )}
 
+        {mentionSuggestions.length > 0 && mentionRange && (
+          <div className="mx-3 mt-2 overflow-hidden rounded-lg border border-border bg-surface-raised shadow-lg">
+            {mentionSuggestions.map((node, index) => (
+              <button
+                key={node.id}
+                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] transition-colors ${
+                  index === mentionIndex ? "bg-accent-selection text-fg" : "text-fg-muted hover:bg-surface-hover"
+                }`}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  const { nextValue, nextCursor } = replaceMentionAtRange(
+                    input,
+                    mentionRange.start,
+                    mentionRange.end,
+                    node.name,
+                  );
+                  setDraft(chatId, nextValue);
+                  setMentionRange(null);
+                  requestAnimationFrame(() => {
+                    inputRef.current?.focus();
+                    inputRef.current?.setSelectionRange(nextCursor, nextCursor);
+                  });
+                }}
+              >
+                <FileText size={12} className="shrink-0" />
+                <span className="truncate">{node.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="flex items-end">
           <button
             onClick={handleFilePicker}
@@ -308,8 +419,13 @@ export default function ChatView({ chatId }: ChatViewProps) {
           <textarea
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setDraft(chatId, e.target.value);
+              updateMentionState(e.target.value, e.target.selectionStart);
+            }}
             onKeyDown={handleKeyDown}
+            onClick={() => updateMentionState(input)}
+            onKeyUp={() => updateMentionState(input)}
             placeholder="Type a message…"
             rows={1}
             disabled={chat.streaming}

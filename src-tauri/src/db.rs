@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 
 pub struct NodeRow {
     pub id: String,
@@ -10,36 +10,101 @@ pub struct NodeRow {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub last_message: Option<String>,
+    pub file_path: Option<String>,
+    pub mime_type: Option<String>,
+    pub file_size: Option<i64>,
+}
+
+const NODES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS nodes (
+    id           TEXT    PRIMARY KEY NOT NULL,
+    type         TEXT    NOT NULL CHECK(type IN ('chat','folder','file')),
+    name         TEXT    NOT NULL,
+    parent_id    TEXT    REFERENCES nodes(id) ON DELETE CASCADE,
+    order_idx    INTEGER NOT NULL DEFAULT 0,
+    is_archived  INTEGER NOT NULL DEFAULT 0 CHECK(is_archived IN (0,1)),
+    provider     TEXT,
+    model        TEXT,
+    last_message TEXT,
+    file_path    TEXT,
+    mime_type    TEXT,
+    file_size    INTEGER,
+    created_at   INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+    updated_at   INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+);";
+
+const NODE_INDEX_SQL: &str = "CREATE INDEX IF NOT EXISTS idx_nodes_tree
+ ON nodes(is_archived, parent_id, order_idx, name);
+
+ CREATE INDEX IF NOT EXISTS idx_nodes_chat_reindex
+ ON nodes(type, is_archived, parent_id);";
+
+fn migrate_nodes_table(conn: &Connection) -> Result<()> {
+    let existing_sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'nodes'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    if existing_sql.is_none() {
+        conn.execute_batch(NODES_TABLE_SQL)?;
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare("PRAGMA table_info(nodes)")?;
+    let column_names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>>>()?;
+    drop(stmt);
+
+    let has_file_path = column_names.iter().any(|name| name == "file_path");
+    let has_mime_type = column_names.iter().any(|name| name == "mime_type");
+    let has_file_size = column_names.iter().any(|name| name == "file_size");
+    let has_file_type = existing_sql
+        .as_deref()
+        .is_some_and(|sql| sql.contains("'file'"));
+
+    if has_file_path && has_mime_type && has_file_size && has_file_type {
+        return Ok(());
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch("ALTER TABLE nodes RENAME TO nodes_old;")?;
+    tx.execute_batch(NODES_TABLE_SQL)?;
+
+    let copy_sql = if has_file_path && has_mime_type && has_file_size {
+        "INSERT INTO nodes (
+            id, type, name, parent_id, order_idx, is_archived, provider, model, last_message,
+            file_path, mime_type, file_size, created_at, updated_at
+        )
+        SELECT
+            id, type, name, parent_id, order_idx, is_archived, provider, model, last_message,
+            file_path, mime_type, file_size, created_at, updated_at
+        FROM nodes_old;"
+    } else {
+        "INSERT INTO nodes (
+            id, type, name, parent_id, order_idx, is_archived, provider, model, last_message,
+            file_path, mime_type, file_size, created_at, updated_at
+        )
+        SELECT
+            id, type, name, parent_id, order_idx, is_archived, provider, model, last_message,
+            NULL, NULL, NULL, created_at, updated_at
+        FROM nodes_old;"
+    };
+
+    tx.execute_batch(copy_sql)?;
+    tx.execute_batch("DROP TABLE nodes_old;")?;
+    tx.commit()?;
+    Ok(())
 }
 
 /// Run all schema migrations on the given connection.
 /// Safe to call multiple times (idempotent via IF NOT EXISTS).
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS nodes (
-            id          TEXT    PRIMARY KEY NOT NULL,
-            type        TEXT    NOT NULL CHECK(type IN ('chat','folder')),
-            name        TEXT    NOT NULL,
-            parent_id   TEXT    REFERENCES nodes(id) ON DELETE CASCADE,
-            order_idx   INTEGER NOT NULL DEFAULT 0,
-            is_archived INTEGER NOT NULL DEFAULT 0 CHECK(is_archived IN (0,1)),
-            provider    TEXT,
-            model       TEXT,
-            last_message TEXT,
-            created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
-            updated_at  INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
-        );",
-    )?;
-
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_nodes_tree
-         ON nodes(is_archived, parent_id, order_idx, name);
-
-         CREATE INDEX IF NOT EXISTS idx_nodes_chat_reindex
-         ON nodes(type, is_archived, parent_id);",
-    )?;
+    migrate_nodes_table(conn)?;
+    conn.execute_batch(NODE_INDEX_SQL)?;
 
     // FTS5 virtual table with Porter stemming for full-text search over messages
     conn.execute_batch(
@@ -71,11 +136,27 @@ pub fn insert_node(
     order_idx: i64,
     provider: Option<&str>,
     model: Option<&str>,
+    file_path: Option<&str>,
+    mime_type: Option<&str>,
+    file_size: Option<i64>,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO nodes (id, type, name, parent_id, order_idx, provider, model)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![id, node_type, name, parent_id, order_idx, provider, model],
+        "INSERT INTO nodes (
+            id, type, name, parent_id, order_idx, provider, model, file_path, mime_type, file_size
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            id,
+            node_type,
+            name,
+            parent_id,
+            order_idx,
+            provider,
+            model,
+            file_path,
+            mime_type,
+            file_size
+        ],
     )?;
     Ok(())
 }
@@ -102,7 +183,9 @@ pub fn index_message(conn: &Connection, content: &str, chat_id: &str, msg_id: &s
 /// List all non-archived nodes ordered by parent_id / order_idx.
 pub fn list_nodes(conn: &Connection) -> Result<Vec<NodeRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, type, name, parent_id, order_idx, is_archived, provider, model, last_message
+        "SELECT
+            id, type, name, parent_id, order_idx, is_archived, provider, model, last_message,
+            file_path, mime_type, file_size
          FROM nodes
          WHERE is_archived = 0
          ORDER BY parent_id NULLS FIRST, order_idx ASC, name ASC",
@@ -118,6 +201,9 @@ pub fn list_nodes(conn: &Connection) -> Result<Vec<NodeRow>> {
             provider: row.get(6)?,
             model: row.get(7)?,
             last_message: row.get(8)?,
+            file_path: row.get(9)?,
+            mime_type: row.get(10)?,
+            file_size: row.get(11)?,
         })
     })?;
     rows.collect()
@@ -256,6 +342,9 @@ mod tests {
             0,
             Some("anthropic"),
             Some("claude-sonnet-4-6"),
+            None,
+            None,
+            None,
         )
         .expect("insert node");
 
@@ -276,7 +365,9 @@ mod tests {
     fn test_insert_folder_with_child() {
         let conn = in_memory_db();
 
-        insert_node(&conn, "folder-1", "folder", "Work", None, 0, None, None)
+        insert_node(
+            &conn, "folder-1", "folder", "Work", None, 0, None, None, None, None, None,
+        )
             .expect("insert folder");
         insert_node(
             &conn,
@@ -287,6 +378,9 @@ mod tests {
             0,
             Some("openai"),
             Some("gpt-4o"),
+            None,
+            None,
+            None,
         )
         .expect("insert child chat");
 
@@ -305,9 +399,9 @@ mod tests {
     fn test_ordering() {
         let conn = in_memory_db();
 
-        insert_node(&conn, "c", "chat", "C", None, 2, None, None).expect("c");
-        insert_node(&conn, "a", "chat", "A", None, 0, None, None).expect("a");
-        insert_node(&conn, "b", "chat", "B", None, 1, None, None).expect("b");
+        insert_node(&conn, "c", "chat", "C", None, 2, None, None, None, None, None).expect("c");
+        insert_node(&conn, "a", "chat", "A", None, 0, None, None, None, None, None).expect("a");
+        insert_node(&conn, "b", "chat", "B", None, 1, None, None, None, None, None).expect("b");
 
         let mut stmt = conn
             .prepare("SELECT id FROM nodes ORDER BY order_idx ASC")
@@ -325,7 +419,8 @@ mod tests {
     fn test_archive_node() {
         let conn = in_memory_db();
 
-        insert_node(&conn, "chat-arc", "chat", "Old Chat", None, 0, None, None).expect("insert");
+        insert_node(&conn, "chat-arc", "chat", "Old Chat", None, 0, None, None, None, None, None)
+            .expect("insert");
         conn.execute("UPDATE nodes SET is_archived = 1 WHERE id = 'chat-arc'", [])
             .expect("archive");
 
@@ -344,7 +439,7 @@ mod tests {
     fn test_fts_insert_and_search() {
         let conn = in_memory_db();
 
-        insert_node(&conn, "chat-fts", "chat", "FTS Chat", None, 0, None, None)
+        insert_node(&conn, "chat-fts", "chat", "FTS Chat", None, 0, None, None, None, None, None)
             .expect("insert chat");
         index_message(
             &conn,
@@ -383,8 +478,14 @@ mod tests {
     fn test_move_node_to_new_parent() {
         let conn = in_memory_db();
 
-        insert_node(&conn, "folder-a", "folder", "Folder A", None, 0, None, None).expect("fa");
-        insert_node(&conn, "folder-b", "folder", "Folder B", None, 1, None, None).expect("fb");
+        insert_node(
+            &conn, "folder-a", "folder", "Folder A", None, 0, None, None, None, None, None,
+        )
+        .expect("fa");
+        insert_node(
+            &conn, "folder-b", "folder", "Folder B", None, 1, None, None, None, None, None,
+        )
+        .expect("fb");
         insert_node(
             &conn,
             "chat-mv",
@@ -392,6 +493,9 @@ mod tests {
             "Moveable Chat",
             Some("folder-a"),
             0,
+            None,
+            None,
+            None,
             None,
             None,
         )
@@ -412,5 +516,49 @@ mod tests {
             .expect("query after move");
 
         assert_eq!(parent, Some("folder-b".to_string()));
+    }
+
+    #[test]
+    fn test_migrate_nodes_table_to_support_files() {
+        let conn = Connection::open_in_memory().expect("in-memory DB");
+        conn.execute_batch(
+            "CREATE TABLE nodes (
+                id TEXT PRIMARY KEY NOT NULL,
+                type TEXT NOT NULL CHECK(type IN ('chat','folder')),
+                name TEXT NOT NULL,
+                parent_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
+                order_idx INTEGER NOT NULL DEFAULT 0,
+                is_archived INTEGER NOT NULL DEFAULT 0 CHECK(is_archived IN (0,1)),
+                provider TEXT,
+                model TEXT,
+                last_message TEXT,
+                created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+                updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+            );
+            INSERT INTO nodes (id, type, name) VALUES ('chat-1', 'chat', 'Legacy Chat');",
+        )
+        .expect("legacy schema");
+
+        run_migrations(&conn).expect("migrate");
+
+        let (node_type, file_path): (String, Option<String>) = conn
+            .query_row(
+                "SELECT type, file_path FROM nodes WHERE id = 'chat-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("migrated row");
+
+        assert_eq!(node_type, "chat");
+        assert_eq!(file_path, None);
+
+        let table_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'nodes'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("table sql");
+        assert!(table_sql.contains("'file'"));
     }
 }

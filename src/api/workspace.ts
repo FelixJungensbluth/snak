@@ -94,17 +94,27 @@ export function autoTitleChat(input: AutoTitleInput) {
 
 // ── Node CRUD ───────────────────────────────────────────────────────────────
 
-export function createChat(provider: string, model: string) {
+export function createChat(provider: string, model: string, parentId: string | null = null) {
   return invoke<WorkspaceNode>("create_chat", {
     workspaceRoot: getRootPath(),
+    parentId,
     provider,
     model,
   });
 }
 
-export function createFolder() {
+export function createFolder(parentId: string | null = null) {
   return invoke<WorkspaceNode>("create_folder", {
     workspaceRoot: getRootPath(),
+    parentId,
+  });
+}
+
+export function importFile(sourcePath: string, parentId: string | null = null) {
+  return invoke<WorkspaceNode>("import_file", {
+    workspaceRoot: getRootPath(),
+    parentId,
+    sourcePath,
   });
 }
 
@@ -184,6 +194,23 @@ export function openWorkspace(dbPath: string) {
 
 export function listNodes() {
   return invoke<WorkspaceNode[]>("list_nodes");
+}
+
+export interface FileContentResponse {
+  id: string;
+  name: string;
+  file_path: string;
+  mime_type: string;
+  file_size: number;
+  content_kind: "markdown" | "pdf" | "image" | "code" | "text" | "binary";
+  content: string | null;
+}
+
+export function getFileContent(nodeId: string) {
+  return invoke<FileContentResponse>("get_file_content", {
+    workspaceRoot: getRootPath(),
+    nodeId,
+  });
 }
 
 export function getRecentWorkspaces() {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, FolderPlus, Settings, FolderOpen, X } from "lucide-react";
+import { Plus, FolderPlus, FilePlus2, Settings, FolderOpen, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import * as api from "../api/workspace";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -26,6 +27,9 @@ export default function Sidebar() {
   const settingsOpen = useUiStore((s) => s.settingsOpen);
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
   const [width, setWidth] = useState(208);
+  const [dragOverSidebar, setDragOverSidebar] = useState(false);
+  const [externalDropFolderId, setExternalDropFolderId] = useState<string | null>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
 
   // Filter nodes by chat name when sidebar filter is active
   const filteredNodes = useMemo(() => {
@@ -140,6 +144,65 @@ export default function Sidebar() {
     }
   }
 
+  async function importFiles(parentId: string | null = null) {
+    setBgCtxMenu(null);
+    const selected = await open({ multiple: true, directory: false });
+    if (!selected) return;
+
+    const paths = Array.isArray(selected) ? selected : [selected];
+    await importFilesFromPaths(paths, parentId);
+  }
+
+  async function importFilesFromPaths(paths: string[], parentId: string | null = null) {
+    await Promise.all(
+      paths.map(async (path) => {
+        try {
+          const node = await api.importFile(path, parentId);
+          upsertNode(node);
+        } catch (e) {
+          console.error("import file failed:", e);
+        }
+      }),
+    );
+  }
+
+  useEffect(() => {
+    const webview = getCurrentWebview();
+    const unlisten = webview.onDragDropEvent((event) => {
+      if (event.payload.type === "over") {
+        const x = event.payload.position.x / (window.devicePixelRatio || 1);
+        const y = event.payload.position.y / (window.devicePixelRatio || 1);
+        const target = document.elementFromPoint(x, y);
+        const isInsideSidebar = !!target && !!sidebarRef.current?.contains(target);
+        const folderTarget = target?.closest("[data-folder-drop-id]") as HTMLElement | null;
+        const folderId = folderTarget?.dataset.folderDropId ?? null;
+        setDragOverSidebar(isInsideSidebar);
+        setExternalDropFolderId(isInsideSidebar ? folderId : null);
+      } else if (event.payload.type === "leave") {
+        setDragOverSidebar(false);
+        setExternalDropFolderId(null);
+      } else if (event.payload.type === "drop") {
+        const x = event.payload.position.x / (window.devicePixelRatio || 1);
+        const y = event.payload.position.y / (window.devicePixelRatio || 1);
+        const target = document.elementFromPoint(x, y);
+        const isInsideSidebar = !!target && !!sidebarRef.current?.contains(target);
+        const folderTarget = target?.closest("[data-folder-drop-id]") as HTMLElement | null;
+        const folderId = folderTarget?.dataset.folderDropId ?? null;
+        setDragOverSidebar(false);
+        setExternalDropFolderId(null);
+        if (!isInsideSidebar) return;
+        const paths = event.payload.paths;
+        if (paths.length > 0) {
+          void importFilesFromPaths(paths, folderId);
+        }
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   // ── background right-click (empty area) ─────────────────────────────────
 
   function handleBgContext(e: React.MouseEvent) {
@@ -159,29 +222,34 @@ export default function Sidebar() {
 
   return (
     <aside
+      ref={sidebarRef}
       className="flex-shrink-0 bg-surface flex flex-col h-screen relative border-r border-border"
       style={{ width: `${width}px` }}
     >
       {/* section header */}
       <div className="px-3 pt-3 pb-2">
-        <span className="text-[10px] text-fg-dim/70 uppercase tracking-wider font-medium">Chats</span>
+        <span className="text-[10px] text-fg-dim/70 uppercase tracking-wider font-medium">Workspace</span>
       </div>
 
       {/* scrollable tree area */}
       <div
-        className="flex-1 overflow-y-auto pb-2"
+        className={`flex-1 overflow-y-auto pb-2 ${dragOverSidebar ? "ring-2 ring-inset ring-accent" : ""}`}
         onContextMenu={handleBgContext}
       >
         {filteredNodes.length === 0 && sidebarFilter.trim() ? (
           <p className="text-[10px] text-fg-dim/60 text-center mt-6 px-4">
-            No chats matching "{sidebarFilter}"
+            No files or chats matching "{sidebarFilter}"
           </p>
         ) : filteredNodes.length === 0 ? (
           <p className="text-[10px] text-fg-dim/60 text-center mt-6 px-4">
-            Right-click to create a chat
+            Right-click to add chats, folders, or files
           </p>
         ) : (
-          <FileTree nodes={filteredNodes} parentId={null} />
+          <FileTree
+            nodes={filteredNodes}
+            parentId={null}
+            externalDropFolderId={externalDropFolderId}
+          />
         )}
       </div>
 
@@ -276,6 +344,11 @@ export default function Sidebar() {
             icon={<FolderPlus size={12} />}
             label="New Folder"
             onClick={() => createNode("folder")}
+          />
+          <BgCtxItem
+            icon={<FilePlus2 size={12} />}
+            label="Import Files"
+            onClick={() => importFiles(null)}
           />
         </div>
       )}

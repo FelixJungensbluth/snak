@@ -5,10 +5,16 @@ export interface WorkspaceIndex {
   byId: Map<string, WorkspaceNode>;
   childrenByParent: Map<string | null, WorkspaceNode[]>;
   chatNodes: WorkspaceNode[];
+  fileNodes: WorkspaceNode[];
 }
 
 export function compareWorkspaceNodes(a: WorkspaceNode, b: WorkspaceNode): number {
-  if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+  const rank: Record<WorkspaceNode["type"], number> = {
+    folder: 0,
+    file: 1,
+    chat: 2,
+  };
+  if (a.type !== b.type) return rank[a.type] - rank[b.type];
   return a.order_idx - b.order_idx || a.name.localeCompare(b.name);
 }
 
@@ -16,11 +22,14 @@ export function buildWorkspaceIndex(nodes: WorkspaceNode[]): WorkspaceIndex {
   const byId = new Map<string, WorkspaceNode>();
   const childrenByParent = new Map<string | null, WorkspaceNode[]>();
   const chatNodes: WorkspaceNode[] = [];
+  const fileNodes: WorkspaceNode[] = [];
 
   for (const node of nodes) {
     byId.set(node.id, node);
     if (node.type === "chat") {
       chatNodes.push(node);
+    } else if (node.type === "file") {
+      fileNodes.push(node);
     }
 
     const siblings = childrenByParent.get(node.parent_id);
@@ -40,6 +49,7 @@ export function buildWorkspaceIndex(nodes: WorkspaceNode[]): WorkspaceIndex {
     byId,
     childrenByParent,
     chatNodes,
+    fileNodes,
   };
 }
 
@@ -78,12 +88,17 @@ export function updateWorkspaceIndexLastMessage(
     current.type === "chat"
       ? index.chatNodes.map((node) => (node.id === nodeId ? updatedNode : node))
       : index.chatNodes;
+  const fileNodes =
+    current.type === "file"
+      ? index.fileNodes.map((node) => (node.id === nodeId ? updatedNode : node))
+      : index.fileNodes;
 
   return {
     allNodes,
     byId,
     childrenByParent,
     chatNodes,
+    fileNodes,
   };
 }
 
@@ -122,11 +137,11 @@ export function filterWorkspaceNodes(index: WorkspaceIndex, query: string): Work
 
   const keepIds = new Set<string>();
 
-  for (const chat of index.chatNodes) {
-    if (!chat.name.toLowerCase().includes(trimmed)) continue;
+  for (const node of [...index.chatNodes, ...index.fileNodes]) {
+    if (!node.name.toLowerCase().includes(trimmed)) continue;
 
-    keepIds.add(chat.id);
-    for (const ancestorId of collectAncestorIds(index, chat.id)) {
+    keepIds.add(node.id);
+    for (const ancestorId of collectAncestorIds(index, node.id)) {
       keepIds.add(ancestorId);
     }
   }

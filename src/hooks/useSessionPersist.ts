@@ -43,7 +43,7 @@ export function useSessionPersist() {
         }
 
         const data: SessionData = JSON.parse(json);
-        // Collect valid chatIds from workspace nodes
+        // Collect valid node IDs from workspace nodes
         const validIds = new Set(nodes.map((n) => n.id));
 
         // Restore pane layout
@@ -56,21 +56,21 @@ export function useSessionPersist() {
           usePaneStore.getState().setFocusedPane(cursor.id);
         }
 
-        // Restore tabs, silently skipping deleted chats
+        // Restore tabs, silently skipping deleted nodes
         const leafIds = data.paneLayout
           ? collectLeafIds(data.paneLayout)
           : [];
 
         for (const paneId of leafIds) {
-          const chatIds = (data.openTabs[paneId] ?? []).filter((id) =>
+          const nodeIds = (data.openTabs[paneId] ?? []).filter((id) =>
             validIds.has(id)
           );
           const activeId = data.activeTabs[paneId];
           const validActive =
             activeId && validIds.has(activeId) ? activeId : null;
 
-          for (const chatId of chatIds) {
-            useTabStore.getState().openTab(paneId, chatId);
+          for (const nodeId of nodeIds) {
+            useTabStore.getState().openTab(paneId, nodeId);
           }
           if (validActive) {
             useTabStore.getState().setActiveTab(paneId, validActive);
@@ -79,9 +79,9 @@ export function useSessionPersist() {
 
         // Restore scroll positions
         if (data.scrollPositions) {
-          for (const [chatId, pos] of Object.entries(data.scrollPositions)) {
-            if (validIds.has(chatId)) {
-              useSessionStore.getState().setScrollPosition(chatId, pos);
+          for (const [nodeId, pos] of Object.entries(data.scrollPositions)) {
+            if (validIds.has(nodeId)) {
+              useSessionStore.getState().setScrollPosition(nodeId, pos);
             }
           }
         }
@@ -109,8 +109,8 @@ export function useSessionPersist() {
       const openTabs: Record<string, string[]> = {};
 
       for (const [paneId, paneTabs] of Object.entries(tabPanes)) {
-        activeTabs[paneId] = paneTabs.activeChatId;
-        openTabs[paneId] = [...paneTabs.chatIds];
+        activeTabs[paneId] = paneTabs.activeNodeId;
+        openTabs[paneId] = [...paneTabs.nodeIds];
       }
 
       const data: SessionData = {

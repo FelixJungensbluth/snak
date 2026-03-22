@@ -7,7 +7,7 @@ import {
   type WorkspaceIndex,
 } from "../utils/workspaceIndex";
 
-export type NodeType = "chat" | "folder";
+export type NodeType = "chat" | "folder" | "file";
 
 export interface WorkspaceNode {
   id: string;
@@ -20,6 +20,10 @@ export interface WorkspaceNode {
   provider: string | null;
   model: string | null;
   last_message: string | null;
+  // file-specific fields
+  file_path: string | null;
+  mime_type: string | null;
+  file_size: number | null;
 }
 
 export interface WorkspaceState {

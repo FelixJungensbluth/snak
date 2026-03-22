@@ -11,6 +11,79 @@ import * as api from "../api/workspace";
 import type { MessageAttachmentInput } from "../api/workspace";
 import { createChatStreamSession } from "../utils/chatStreamSession";
 import { buildMessagePreview } from "../utils/messagePreview";
+import {
+  extractMentionedFileNames,
+  getMentionAttachmentType,
+} from "../utils/fileNodes";
+import { estimateTokens } from "../providers";
+
+function resolveWorkspaceAttachmentPath(rootPath: string, path: string): string {
+  if (path.startsWith("/")) return path;
+  return `${rootPath}/${path}`;
+}
+
+function dedupeAttachments(attachments: MessageAttachmentInput[]): MessageAttachmentInput[] {
+  const seen = new Set<string>();
+  return attachments.filter((attachment) => {
+    const key = `${attachment.attachment_type}:${attachment.path}:${attachment.name}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function resolveMentionAttachments(
+  content: string,
+  rootPath: string,
+): Promise<MessageAttachmentInput[]> {
+  const mentionedNames = extractMentionedFileNames(content);
+  if (mentionedNames.length === 0) return [];
+
+  const fileNodes = useWorkspaceStore.getState().index.fileNodes;
+  const attachments: MessageAttachmentInput[] = [];
+
+  for (const name of mentionedNames) {
+    const node = fileNodes.find((fileNode) => fileNode.name === name);
+    if (!node || !node.file_path) continue;
+
+    const attachmentType = getMentionAttachmentType(node);
+    if (!attachmentType) continue;
+
+    attachments.push({
+      attachment_type: attachmentType,
+      path: resolveWorkspaceAttachmentPath(rootPath, node.file_path),
+      name: node.name,
+    });
+  }
+
+  return dedupeAttachments(attachments);
+}
+
+async function findOversizedMentionedFiles(content: string) {
+  const mentionedNames = extractMentionedFileNames(content);
+  if (mentionedNames.length === 0) return [];
+
+  const fileNodes = useWorkspaceStore.getState().index.fileNodes;
+  const oversized: { name: string; tokens: number }[] = [];
+
+  for (const name of mentionedNames) {
+    const node = fileNodes.find((fileNode) => fileNode.name === name);
+    if (!node) continue;
+
+    try {
+      const file = await api.getFileContent(node.id);
+      if (!file.content) continue;
+      const tokens = estimateTokens(file.content);
+      if (tokens > 50_000) {
+        oversized.push({ name: file.name, tokens });
+      }
+    } catch (e) {
+      console.error("Failed to inspect mentioned file:", e);
+    }
+  }
+
+  return oversized;
+}
 
 /**
  * Chat engine hook — encapsulates chat loading, message sending,
@@ -92,9 +165,21 @@ export function useChatEngine(chatId: string) {
   const sendMessage = useCallback(
     async (text: string, attachments: Attachment[] = []) => {
       const currentChat = chatRef.current;
-      if ((!text.trim() && attachments.length === 0) || !rootPath || !currentChat || currentChat.streaming) return;
+      const trimmedText = text.trim();
+      if ((!trimmedText && attachments.length === 0) || !rootPath || !currentChat || currentChat.streaming) return;
 
       setStreamError(null);
+
+      const oversizedMentions = await findOversizedMentionedFiles(trimmedText);
+      if (oversizedMentions.length > 0) {
+        const details = oversizedMentions
+          .map((file) => `${file.name} (~${Math.round(file.tokens / 1000)}k tokens)`)
+          .join("\n");
+        const shouldContinue = window.confirm(
+          `These mentioned files are large and may consume a lot of context:\n\n${details}\n\nContinue anyway?`,
+        );
+        if (!shouldContinue) return;
+      }
 
       // Save attachments to workspace and get relative paths
       const savedAttachments = await Promise.all(
@@ -111,7 +196,7 @@ export function useChatEngine(chatId: string) {
 
       // Build the content text. For images, add markdown image references.
       // For PDF/markdown, note the attachment in the stored content.
-      let storedContent = text.trim();
+      let storedContent = trimmedText;
       for (const att of savedAttachments) {
         if (att.type === "image") {
           storedContent += `\n\n![${att.name}](${att.path})`;
@@ -152,22 +237,33 @@ export function useChatEngine(chatId: string) {
       setStreaming(chatId, true);
 
       // Build API messages — include attachment info for the current user message
-      // so Rust can build multimodal content blocks
-      const apiMessages = [...currentChat.messages, userMsg].map((m) => {
+      // so Rust can build multimodal content blocks.
+      const apiMessages = await Promise.all([...currentChat.messages, userMsg].map(async (m) => {
+        const uploadedAttachments: MessageAttachmentInput[] = m.id === userMsg.id
+          ? attachments.map((attachment) => ({
+              attachment_type: attachment.type,
+              path: attachment.path,
+              name: attachment.name,
+            }))
+          : m.attachments.map((attachment) => ({
+              attachment_type: attachment.type,
+              path: resolveWorkspaceAttachmentPath(rootPath, attachment.path),
+              name: attachment.name,
+            }));
+        const mentionAttachments = await resolveMentionAttachments(m.content, rootPath);
+        const mergedAttachments = dedupeAttachments([
+          ...uploadedAttachments,
+          ...mentionAttachments,
+        ]);
         const apiMsg: { role: string; content: string; attachments?: MessageAttachmentInput[] } = {
           role: m.role,
           content: m.content,
         };
-        // Only attach files for the message being sent (current user message)
-        if (m.id === userMsg.id && attachments.length > 0) {
-          apiMsg.attachments = attachments.map((a) => ({
-            attachment_type: a.type,
-            path: a.path, // original absolute path — Rust reads the file from here
-            name: a.name,
-          }));
+        if (mergedAttachments.length > 0) {
+          apiMsg.attachments = mergedAttachments;
         }
         return apiMsg;
-      });
+      }));
 
       const isFirstExchange = currentChat.messages.length === 0;
       const session = await createChatStreamSession({
@@ -196,7 +292,7 @@ export function useChatEngine(chatId: string) {
               provider: currentChat.provider,
               model: currentChat.model,
               messages: [
-                { role: "user", content: text.trim() },
+                { role: "user", content: trimmedText },
                 { role: "assistant", content: fullText },
               ],
               base_url: currentChat.provider === "ollama" ? ollamaBaseUrl : null,

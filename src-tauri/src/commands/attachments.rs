@@ -71,6 +71,9 @@ pub fn read_file_base64(file_path: String) -> Result<(String, String), String> {
         .to_lowercase();
 
     let mime = match ext.as_str() {
+        "pdf" => "application/pdf",
+        "md" | "markdown" | "mdx" => "text/markdown",
+        "txt" | "log" | "csv" | "tsv" => "text/plain",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",

@@ -4,14 +4,17 @@ use std::sync::Mutex;
 pub mod commands;
 pub mod db;
 
-use commands::attachments::{extract_pdf_text, read_file_base64, read_file_text, save_attachment};
+use commands::attachments::{
+    extract_pdf_text, read_file_base64, read_file_text, save_attachment,
+};
 use commands::keys::{delete_api_key, get_api_key, set_api_key};
 use commands::streaming::{abort_stream, auto_title_chat, list_ollama_models, stream_chat, StreamState};
 use commands::workspace::{
     append_message_to_file, archive_node, create_chat, create_folder, db_health, delete_node,
-    get_recent_workspaces, get_saved_workspace, index_message, insert_node, list_nodes,
-    load_session, move_node, open_workspace, read_chat_file, reindex_all_chats, rename_node,
-    remove_recent_workspace, save_session, save_workspace, search_messages,
+    get_file_content, get_recent_workspaces, get_saved_workspace, import_file, index_message,
+    insert_node, list_nodes, load_session, move_node, open_workspace, read_chat_file,
+    reindex_all_chats, rename_node, remove_recent_workspace, save_session, save_workspace,
+    search_messages,
     update_chat_model_config, DbState,
 };
 
@@ -34,11 +37,13 @@ pub fn run() {
             list_nodes,
             create_chat,
             create_folder,
+            import_file,
             rename_node,
             archive_node,
             delete_node,
             move_node,
             read_chat_file,
+            get_file_content,
             append_message_to_file,
             update_chat_model_config,
             get_saved_workspace,

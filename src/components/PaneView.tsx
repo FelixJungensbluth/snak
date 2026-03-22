@@ -26,8 +26,13 @@ export default function PaneView({ paneId }: PaneViewProps) {
   const upsertNode = useWorkspaceStore((s) => s.upsertNode);
   const defaultProvider = useSettingsStore((s) => s.defaultProvider);
   const defaultModel = useSettingsStore((s) => s.defaultModel);
-  const activeChatId = paneTabs?.activeChatId ?? null;
+  const activeNodeId = paneTabs?.activeNodeId ?? null;
+  const nodeIds = paneTabs?.nodeIds ?? [];
   const { activeDrag } = useTabDndState();
+  const indexById = useWorkspaceStore((s) => s.index.byId);
+  const activeNode = useWorkspaceStore((s) =>
+    activeNodeId ? s.index.byId.get(activeNodeId) ?? null : null,
+  );
 
   const showDropZones = activeDrag !== null;
 
@@ -63,15 +68,29 @@ export default function PaneView({ paneId }: PaneViewProps) {
         )}
       </div>
       <div className="flex-1 overflow-hidden">
-        {activeChatId ? (
+        {activeNodeId && activeNode ? (
           <Suspense
             fallback={
               <div className="flex h-full items-center justify-center text-fg-dim text-xs">
-                Loading chat…
+                Loading…
               </div>
             }
           >
-            <ChatView chatId={activeChatId} />
+            {/* Keep file tabs mounted to avoid expensive PDF remount/re-render on tab switches. */}
+            {nodeIds.map((nodeId) => {
+              const node = indexById.get(nodeId);
+              if (!node || node.type !== "file") return null;
+              const isActive = nodeId === activeNodeId;
+              return (
+                <div
+                  key={`file-${nodeId}`}
+                  className={`h-full ${isActive ? "block" : "hidden"}`}
+                >
+                  <FileViewer nodeId={nodeId} />
+                </div>
+              );
+            })}
+            {activeNode.type === "chat" ? <ChatView chatId={activeNodeId} /> : null}
           </Suspense>
         ) : (
           <div className="flex flex-col items-center justify-center h-full gap-3">
@@ -99,6 +118,8 @@ export default function PaneView({ paneId }: PaneViewProps) {
     </div>
   );
 }
+
+const FileViewer = lazy(() => import("./FileViewer"));
 
 function PaneDropZone({
   paneId,

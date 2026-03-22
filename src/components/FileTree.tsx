@@ -3,11 +3,15 @@ import {
   ChevronRight,
   ChevronDown,
   Folder,
+  FilePlus2,
+  FileText,
+  Image as ImageIcon,
   MessageSquare,
   Pencil,
   Archive,
   Trash2,
 } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
 import * as api from "../api/workspace";
 import {
   SortableContext,
@@ -20,18 +24,30 @@ import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
 import { useAppDndState, type SidebarDragData } from "./TabDndContext";
 import { buildChildIndex, type ChildIndex } from "../utils/buildChildIndex";
+import { getFileViewKind } from "../utils/fileNodes";
 
 interface FileTreeProps {
   nodes: WorkspaceNode[];
   parentId: string | null;
   depth?: number;
+  externalDropFolderId?: string | null;
 }
 
-export default function FileTree({ nodes, parentId, depth = 0 }: FileTreeProps) {
+export default function FileTree({
+  nodes,
+  parentId,
+  depth = 0,
+  externalDropFolderId = null,
+}: FileTreeProps) {
   const childIndex = useMemo(() => buildChildIndex(nodes), [nodes]);
 
   return (
-    <FileTreeLevel childIndex={childIndex} parentId={parentId} depth={depth} />
+    <FileTreeLevel
+      childIndex={childIndex}
+      parentId={parentId}
+      depth={depth}
+      externalDropFolderId={externalDropFolderId}
+    />
   );
 }
 
@@ -39,10 +55,12 @@ function FileTreeLevel({
   childIndex,
   parentId,
   depth,
+  externalDropFolderId,
 }: {
   childIndex: ChildIndex;
   parentId: string | null;
   depth: number;
+  externalDropFolderId: string | null;
 }) {
   const children = childIndex.get(parentId);
   if (!children || children.length === 0) return null;
@@ -58,6 +76,7 @@ function FileTreeLevel({
             node={node}
             childIndex={childIndex}
             depth={depth}
+            externalDropFolderId={externalDropFolderId}
           />
         ))}
       </ul>
@@ -71,10 +90,12 @@ const FileTreeNode = memo(function FileTreeNode({
   node,
   childIndex,
   depth,
+  externalDropFolderId,
 }: {
   node: WorkspaceNode;
   childIndex: ChildIndex;
   depth: number;
+  externalDropFolderId: string | null;
 }) {
   const isFolder = node.type === "folder";
   const { activeDrag, overFolderId } = useAppDndState();
@@ -181,11 +202,37 @@ const FileTreeNode = memo(function FileTreeNode({
 
   const pl = 8 + depth * 16;
   const isActiveNode = activeDrag?.type === "sidebar-node" && activeDrag.nodeId === node.id;
-  const isDropTarget = isFolder && overFolderId === node.id && !isActiveNode;
+  const isDropTarget =
+    isFolder &&
+    (overFolderId === node.id || externalDropFolderId === node.id) &&
+    !isActiveNode;
+  const fileKind = node.type === "file" ? getFileViewKind(node) : null;
+
+  async function handleImportFiles() {
+    setCtxMenu(null);
+    if (!isFolder) return;
+
+    const selected = await open({ multiple: true, directory: false });
+    if (!selected) return;
+
+    const paths = Array.isArray(selected) ? selected : [selected];
+    await Promise.all(
+      paths.map(async (path) => {
+        try {
+          const fileNode = await api.importFile(path, node.id);
+          upsertNode(fileNode);
+        } catch (e) {
+          console.error("import_file failed:", e);
+        }
+      }),
+    );
+    setExpanded(true);
+  }
 
   return (
     <li ref={setNodeRef} style={style}>
       <div
+        data-folder-drop-id={isFolder ? node.id : undefined}
         className={`flex items-center h-[26px] cursor-pointer hover:bg-surface-hover/70 select-none group mx-1.5 rounded ${
           isDropTarget ? "bg-accent-selection ring-1 ring-accent ring-inset" : ""
         }`}
@@ -220,6 +267,12 @@ const FileTreeNode = memo(function FileTreeNode({
         <span className="w-4 flex items-center justify-center flex-shrink-0 mr-1">
           {isFolder ? (
             <Folder size={14} className="text-icon-folder" />
+          ) : node.type === "file" ? (
+            fileKind === "image" ? (
+              <ImageIcon size={14} className="text-fg-muted" />
+            ) : (
+              <FileText size={14} className="text-fg-muted" />
+            )
           ) : (
             <MessageSquare size={14} className="text-icon-chat" />
           )}
@@ -245,7 +298,12 @@ const FileTreeNode = memo(function FileTreeNode({
 
       {/* children */}
       {isFolder && expanded && (
-        <FileTreeLevel childIndex={childIndex} parentId={node.id} depth={depth + 1} />
+        <FileTreeLevel
+          childIndex={childIndex}
+          parentId={node.id}
+          depth={depth + 1}
+          externalDropFolderId={externalDropFolderId}
+        />
       )}
 
       {/* context menu */}
@@ -255,6 +313,10 @@ const FileTreeNode = memo(function FileTreeNode({
           className="fixed z-50 bg-surface-raised border border-border-strong rounded-lg shadow-2xl py-1 min-w-[140px]"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
         >
+          {isFolder && (
+            <CtxItem icon={<FilePlus2 size={12} />} label="Import Files" onClick={handleImportFiles} />
+          )}
+          {isFolder && <div className="mx-2 my-1 border-t border-border" />}
           <CtxItem icon={<Pencil size={12} />} label="Rename" onClick={startRename} />
           <CtxItem icon={<Archive size={12} />} label="Archive" onClick={handleArchive} />
           <div className="mx-2 my-1 border-t border-border" />

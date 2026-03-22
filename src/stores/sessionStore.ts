@@ -3,18 +3,18 @@ import { immer } from "zustand/middleware/immer";
 import type { PaneNode } from "./paneStore";
 
 export interface PaneScrollState {
-  chatId: string;
+  nodeId: string;
   scrollTop: number;
 }
 
 export interface SessionState {
   /** Serialized pane layout — mirrors paneStore.root for persistence */
   paneLayout: PaneNode | null;
-  /** Map from paneId to active chatId (mirrors tabStore) */
+  /** Map from paneId to active nodeId (mirrors tabStore) */
   activeTabs: Record<string, string | null>;
-  /** Map from paneId to ordered list of open chatIds (mirrors tabStore) */
+  /** Map from paneId to ordered list of open nodeIds (mirrors tabStore) */
   openTabs: Record<string, string[]>;
-  /** Map from chatId to scroll position */
+  /** Map from nodeId to scroll position */
   scrollPositions: Record<string, number>;
   /** Whether the session has been hydrated from disk */
   hydrated: boolean;
@@ -24,7 +24,7 @@ export interface SessionActions {
   setPaneLayout: (layout: PaneNode) => void;
   setActiveTabs: (activeTabs: Record<string, string | null>) => void;
   setOpenTabs: (openTabs: Record<string, string[]>) => void;
-  setScrollPosition: (chatId: string, scrollTop: number) => void;
+  setScrollPosition: (nodeId: string, scrollTop: number) => void;
   setHydrated: (hydrated: boolean) => void;
   /** Snapshot current state for serialization */
   snapshot: () => Omit<SessionState, "hydrated">;
@@ -53,9 +53,9 @@ export const useSessionStore = create<SessionState & SessionActions>()(
         state.openTabs = openTabs;
       }),
 
-    setScrollPosition: (chatId, scrollTop) =>
+    setScrollPosition: (nodeId, scrollTop) =>
       set((state) => {
-        state.scrollPositions[chatId] = scrollTop;
+        state.scrollPositions[nodeId] = scrollTop;
       }),
 
     setHydrated: (hydrated) =>

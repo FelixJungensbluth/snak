@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::State;
 use tauri_plugin_store::StoreExt;
@@ -13,6 +13,137 @@ const WORKSPACE_STORE: &str = "workspace.bin";
 const WORKSPACE_PATH_KEY: &str = "workspace_path";
 const RECENT_WORKSPACES_KEY: &str = "recent_workspaces";
 const MAX_RECENT_WORKSPACES: usize = 10;
+
+fn file_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+fn is_markdown_extension(ext: &str) -> bool {
+    matches!(ext, "md" | "markdown" | "mdx")
+}
+
+fn is_text_extension(ext: &str) -> bool {
+    matches!(
+        ext,
+        "txt" | "log" | "rtf" | "csv" | "tsv" | "ini" | "cfg" | "conf" | "env"
+    )
+}
+
+fn is_code_extension(ext: &str) -> bool {
+    matches!(
+        ext,
+        "c"
+            | "cc"
+            | "cpp"
+            | "cs"
+            | "css"
+            | "go"
+            | "h"
+            | "hpp"
+            | "html"
+            | "java"
+            | "js"
+            | "json"
+            | "jsx"
+            | "kt"
+            | "lua"
+            | "php"
+            | "py"
+            | "rb"
+            | "rs"
+            | "scss"
+            | "sh"
+            | "sql"
+            | "swift"
+            | "toml"
+            | "ts"
+            | "tsx"
+            | "xml"
+            | "yaml"
+            | "yml"
+            | "zsh"
+        )
+}
+
+fn detect_mime_type(path: &Path) -> String {
+    match file_extension(path).as_str() {
+        "pdf" => "application/pdf",
+        "md" | "markdown" | "mdx" => "text/markdown",
+        "txt" | "log" | "csv" | "tsv" | "ini" | "cfg" | "conf" | "env" => "text/plain",
+        "c" | "cc" | "cpp" | "cs" | "go" | "h" | "hpp" | "java" | "js" | "jsx" | "kt"
+        | "lua" | "php" | "py" | "rb" | "rs" | "sh" | "sql" | "swift" | "ts" | "tsx"
+        | "zsh" => "text/x-source",
+        "css" | "html" | "scss" | "xml" => "text/html",
+        "json" => "application/json",
+        "toml" => "application/toml",
+        "yaml" | "yml" => "application/yaml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
+fn file_content_kind(name: &str, mime_type: &str) -> &'static str {
+    let ext = file_extension(Path::new(name));
+    if mime_type == "application/pdf" {
+        "pdf"
+    } else if mime_type.starts_with("image/") {
+        "image"
+    } else if is_markdown_extension(&ext) || mime_type == "text/markdown" {
+        "markdown"
+    } else if is_code_extension(&ext) || mime_type == "text/x-source" {
+        "code"
+    } else if mime_type.starts_with("text/")
+        || matches!(
+            mime_type,
+            "application/json" | "application/toml" | "application/yaml"
+        )
+        || is_text_extension(&ext)
+    {
+        "text"
+    } else {
+        "binary"
+    }
+}
+
+fn extract_file_text(path: &Path, mime_type: &str) -> Result<Option<String>, String> {
+    match file_content_kind(
+        path.file_name().and_then(|name| name.to_str()).unwrap_or_default(),
+        mime_type,
+    ) {
+        "markdown" | "code" | "text" => fs::read_to_string(path)
+            .map(Some)
+            .map_err(|e| format!("Failed to read file: {e}")),
+        "pdf" => {
+            let bytes = fs::read(path).map_err(|e| format!("Failed to read PDF: {e}"))?;
+            let text = pdf_extract::extract_text_from_mem(&bytes)
+                .map_err(|e| format!("Failed to extract PDF text: {e}"))?;
+            Ok(Some(text))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn imported_file_dir(workspace_root: &str, node_id: &str) -> PathBuf {
+    Path::new(workspace_root)
+        .join(".snak")
+        .join("files")
+        .join(node_id)
+}
+
+fn relative_workspace_path(workspace_root: &str, abs_path: &Path) -> Result<String, String> {
+    abs_path
+        .strip_prefix(workspace_root)
+        .map_err(|_| "Path is outside of the workspace".to_string())
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+}
 
 // ── Health / open ────────────────────────────────────────────────────────────
 
@@ -122,6 +253,9 @@ pub struct NodeResponse {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub last_message: Option<String>,
+    pub file_path: Option<String>,
+    pub mime_type: Option<String>,
+    pub file_size: Option<i64>,
 }
 
 /// List all non-archived nodes from the workspace.
@@ -142,6 +276,9 @@ pub fn list_nodes(state: State<'_, DbState>) -> Result<Vec<NodeResponse>, String
                     provider: r.provider,
                     model: r.model,
                     last_message: r.last_message,
+                    file_path: r.file_path,
+                    mime_type: r.mime_type,
+                    file_size: r.file_size,
                 })
                 .collect()
         })
@@ -159,6 +296,9 @@ pub struct InsertNodePayload {
     pub order_idx: i64,
     pub provider: Option<String>,
     pub model: Option<String>,
+    pub file_path: Option<String>,
+    pub mime_type: Option<String>,
+    pub file_size: Option<i64>,
 }
 
 /// Low-level insert a node row (used by integration tests / direct callers).
@@ -175,6 +315,9 @@ pub fn insert_node(payload: InsertNodePayload, state: State<'_, DbState>) -> Res
         payload.order_idx,
         payload.provider.as_deref(),
         payload.model.as_deref(),
+        payload.file_path.as_deref(),
+        payload.mime_type.as_deref(),
+        payload.file_size,
     )
     .map_err(|e| e.to_string())
 }
@@ -250,6 +393,9 @@ pub fn create_chat(
         order_idx,
         Some(&provider_str),
         Some(&model_str),
+        None,
+        None,
+        None,
     )
     .map_err(|e| e.to_string())?;
 
@@ -263,6 +409,9 @@ pub fn create_chat(
         provider: Some(provider_str),
         model: Some(model_str),
         last_message: None,
+        file_path: None,
+        mime_type: None,
+        file_size: None,
     })
 }
 
@@ -301,6 +450,9 @@ pub fn create_folder(
         order_idx,
         None,
         None,
+        None,
+        None,
+        None,
     )
     .map_err(|e| e.to_string())?;
 
@@ -314,12 +466,141 @@ pub fn create_folder(
         provider: None,
         model: None,
         last_message: None,
+        file_path: None,
+        mime_type: None,
+        file_size: None,
+    })
+}
+
+#[tauri::command]
+pub fn import_file(
+    workspace_root: String,
+    parent_id: Option<String>,
+    source_path: String,
+    state: State<'_, DbState>,
+) -> Result<NodeResponse, String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+
+    let src = Path::new(&source_path);
+    if !src.exists() {
+        return Err(format!("Source file not found: {source_path}"));
+    }
+
+    // Validate the target parent when importing into a folder.
+    let _ = node_dir_for_parent(&workspace_root, parent_id.as_deref(), conn)?;
+
+    let id = Uuid::new_v4().to_string();
+    let display_name = src
+        .file_name()
+        .ok_or("Invalid source file name")?
+        .to_string_lossy()
+        .to_string();
+    let mime_type = detect_mime_type(src);
+
+    let dest_dir = imported_file_dir(&workspace_root, &id);
+    fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+    let dest_path = dest_dir.join(&display_name);
+    fs::copy(src, &dest_path).map_err(|e| e.to_string())?;
+
+    let rel_path = relative_workspace_path(&workspace_root, &dest_path)?;
+    let file_size = fs::metadata(&dest_path)
+        .map(|metadata| metadata.len() as i64)
+        .map_err(|e| e.to_string())?;
+
+    let order_idx: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(order_idx), -1) + 1 FROM nodes WHERE parent_id IS ?1",
+            rusqlite::params![parent_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    db::insert_node(
+        conn,
+        &id,
+        "file",
+        &display_name,
+        parent_id.as_deref(),
+        order_idx,
+        None,
+        None,
+        Some(&rel_path),
+        Some(&mime_type),
+        Some(file_size),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(NodeResponse {
+        id,
+        node_type: "file".to_string(),
+        name: display_name,
+        parent_id,
+        order_idx,
+        is_archived: false,
+        provider: None,
+        model: None,
+        last_message: None,
+        file_path: Some(rel_path),
+        mime_type: Some(mime_type),
+        file_size: Some(file_size),
+    })
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct FileContentResponse {
+    pub id: String,
+    pub name: String,
+    pub file_path: String,
+    pub mime_type: String,
+    pub file_size: i64,
+    pub content_kind: String,
+    pub content: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_file_content(
+    workspace_root: String,
+    node_id: String,
+    state: State<'_, DbState>,
+) -> Result<FileContentResponse, String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+
+    let (name, file_path, mime_type, file_size): (String, String, Option<String>, Option<i64>) =
+        conn.query_row(
+            "SELECT name, file_path, mime_type, file_size
+             FROM nodes
+             WHERE id = ?1 AND type = 'file'",
+            rusqlite::params![node_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let abs_path = Path::new(&workspace_root).join(&file_path);
+    let resolved_mime_type = mime_type.unwrap_or_else(|| detect_mime_type(&abs_path));
+    let resolved_file_size = file_size.unwrap_or_else(|| {
+        fs::metadata(&abs_path)
+            .map(|metadata| metadata.len() as i64)
+            .unwrap_or_default()
+    });
+    let content_kind = file_content_kind(&name, &resolved_mime_type).to_string();
+    let content = extract_file_text(&abs_path, &resolved_mime_type)?;
+
+    Ok(FileContentResponse {
+        id: node_id,
+        name,
+        file_path,
+        mime_type: resolved_mime_type,
+        file_size: resolved_file_size,
+        content_kind,
+        content,
     })
 }
 
 // ── Rename / Archive / Delete ─────────────────────────────────────────────────
 
-/// Rename a node: updates the SQLite display name and the `.md` file frontmatter (for chats).
+/// Rename a node: updates the SQLite display name and on-disk content when needed.
 #[tauri::command]
 pub fn rename_node(
     workspace_root: String,
@@ -381,6 +662,44 @@ pub fn rename_node(
                 }
             }
         }
+    } else if node_type == "file" {
+        let current_rel_path: String = conn
+            .query_row(
+                "SELECT file_path FROM nodes WHERE id = ?1",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        let old_abs_path = Path::new(&workspace_root).join(&current_rel_path);
+        let new_abs_path = old_abs_path
+            .parent()
+            .ok_or("Imported file is missing a parent directory")?
+            .join(&new_name);
+
+        if old_abs_path.exists() && old_abs_path != new_abs_path {
+            fs::rename(&old_abs_path, &new_abs_path).map_err(|e| e.to_string())?;
+        }
+
+        let next_rel_path = relative_workspace_path(&workspace_root, &new_abs_path)?;
+        let next_mime_type = detect_mime_type(&new_abs_path);
+        let next_file_size = fs::metadata(&new_abs_path)
+            .map(|metadata| metadata.len() as i64)
+            .map_err(|e| e.to_string())?;
+
+        conn.execute(
+            "UPDATE nodes
+             SET name = ?1,
+                 file_path = ?2,
+                 mime_type = ?3,
+                 file_size = ?4,
+                 updated_at = strftime('%s','now') * 1000
+             WHERE id = ?5",
+            rusqlite::params![new_name, next_rel_path, next_mime_type, next_file_size, id],
+        )
+        .map_err(|e| e.to_string())?;
+
+        return Ok(());
     }
 
     db::rename_node(conn, &id, &new_name).map_err(|e| e.to_string())
@@ -423,6 +742,25 @@ pub fn delete_node(
 
     let dir = node_dir_for_parent(&workspace_root, parent_id.as_deref(), conn)?;
 
+    let mut stmt = conn
+        .prepare(
+            "WITH RECURSIVE descendants(id, type) AS (
+                SELECT id, type FROM nodes WHERE id = ?1
+                UNION ALL
+                SELECT n.id, n.type
+                FROM nodes n
+                INNER JOIN descendants d ON n.parent_id = d.id
+            )
+            SELECT id FROM descendants WHERE type = 'file'",
+        )
+        .map_err(|e| e.to_string())?;
+    let file_ids: Vec<String> = stmt
+        .query_map(rusqlite::params![id], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    drop(stmt);
+
     match node_type.as_str() {
         "chat" => {
             let file = dir.join(format!("{id}.md"));
@@ -436,7 +774,20 @@ pub fn delete_node(
                 fs::remove_dir_all(&folder).map_err(|e| e.to_string())?;
             }
         }
+        "file" => {
+            let file_dir = imported_file_dir(&workspace_root, &id);
+            if file_dir.exists() {
+                fs::remove_dir_all(&file_dir).map_err(|e| e.to_string())?;
+            }
+        }
         _ => {}
+    }
+
+    for file_id in file_ids {
+        let file_dir = imported_file_dir(&workspace_root, &file_id);
+        if file_dir.exists() {
+            fs::remove_dir_all(&file_dir).map_err(|e| e.to_string())?;
+        }
     }
 
     db::delete_node(conn, &id).map_err(|e| e.to_string())

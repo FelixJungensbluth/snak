@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { X, MessageSquare, PanelRight, PanelBottom, XCircle, Loader2 } from "lucide-react";
+import { X, MessageSquare, FileText, Image as ImageIcon, PanelRight, PanelBottom, XCircle, Loader2 } from "lucide-react";
 import { useDraggable } from "@dnd-kit/core";
 import { useTabStore } from "../stores/tabStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { usePaneStore } from "../stores/paneStore";
 import { useChatStore } from "../stores/chatStore";
 import type { TabDragData } from "./TabDndContext";
+import { getFileViewKind } from "../utils/fileNodes";
 
 interface TabBarProps {
   paneId: string;
@@ -23,7 +24,7 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
   const splitPane = usePaneStore((s) => s.splitPane);
   const chats = useChatStore((s) => s.chats);
 
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; chatId: string } | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -35,43 +36,45 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
     return () => document.removeEventListener("mousedown", handler);
   }, [ctxMenu]);
 
-  const chatIds = paneTabs?.chatIds ?? [];
-  const activeChatId = paneTabs?.activeChatId ?? null;
+  const nodeIds = paneTabs?.nodeIds ?? [];
+  const activeNodeId = paneTabs?.activeNodeId ?? null;
 
   function handleSplit(direction: "horizontal" | "vertical") {
     if (!ctxMenu) return;
     const newPaneId = Math.random().toString(36).slice(2, 10);
     splitPane(paneId, direction, newPaneId);
     // Open the same chat in the new pane
-    openTab(newPaneId, ctxMenu.chatId);
+    openTab(newPaneId, ctxMenu.nodeId);
     setCtxMenu(null);
   }
 
-  if (chatIds.length === 0) return null;
+  if (nodeIds.length === 0) return null;
 
   return (
     <div className="flex items-end bg-surface border-b border-border h-[35px]">
       <div className="flex items-end flex-1 overflow-x-auto">
-      {chatIds.map((chatId) => {
-        const node = nodeById.get(chatId);
+      {nodeIds.map((nodeId) => {
+        const node = nodeById.get(nodeId);
         const name = node?.name ?? "Untitled";
-        const isActive = chatId === activeChatId;
+        const isActive = nodeId === activeNodeId;
 
         return (
           <DraggableTab
-            key={chatId}
-            chatId={chatId}
+            key={nodeId}
+            nodeId={nodeId}
             paneId={paneId}
             name={name}
+            nodeType={node?.type ?? "chat"}
+            fileMimeType={node?.mime_type ?? null}
             isActive={isActive}
             isFocused={isFocused}
-            isStreaming={chats[chatId]?.streaming ?? false}
-            onActivate={() => setActiveTab(paneId, chatId)}
-            onClose={() => closeTab(paneId, chatId)}
+            isStreaming={node?.type === "chat" ? (chats[nodeId]?.streaming ?? false) : false}
+            onActivate={() => setActiveTab(paneId, nodeId)}
+            onClose={() => closeTab(paneId, nodeId)}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              setCtxMenu({ x: e.clientX, y: e.clientY, chatId });
+              setCtxMenu({ x: e.clientX, y: e.clientY, nodeId });
             }}
           />
         );
@@ -100,7 +103,7 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
             icon={<X size={12} />}
             label="Close"
             onClick={() => {
-              closeTab(paneId, ctxMenu.chatId);
+              closeTab(paneId, ctxMenu.nodeId);
               setCtxMenu(null);
             }}
           />
@@ -108,7 +111,7 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
             icon={<XCircle size={12} />}
             label="Close Other Tabs"
             onClick={() => {
-              closeOtherTabs(paneId, ctxMenu.chatId);
+              closeOtherTabs(paneId, ctxMenu.nodeId);
               setCtxMenu(null);
             }}
           />
@@ -116,7 +119,7 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
             icon={<X size={12} />}
             label="Close Tabs to Right"
             onClick={() => {
-              closeTabsToRight(paneId, ctxMenu.chatId);
+              closeTabsToRight(paneId, ctxMenu.nodeId);
               setCtxMenu(null);
             }}
           />
@@ -127,9 +130,11 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
 }
 
 function DraggableTab({
-  chatId,
+  nodeId,
   paneId,
   name,
+  nodeType,
+  fileMimeType,
   isActive,
   isFocused,
   isStreaming,
@@ -137,9 +142,11 @@ function DraggableTab({
   onClose,
   onContextMenu,
 }: {
-  chatId: string;
+  nodeId: string;
   paneId: string;
   name: string;
+  nodeType: "chat" | "folder" | "file";
+  fileMimeType: string | null;
   isActive: boolean;
   isFocused?: boolean;
   isStreaming?: boolean;
@@ -147,11 +154,25 @@ function DraggableTab({
   onClose: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
-  const dragData: TabDragData = { type: "tab", chatId, sourcePaneId: paneId };
+  const dragData: TabDragData = { type: "tab", nodeId, sourcePaneId: paneId };
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: `tab:${paneId}:${chatId}`,
+    id: `tab:${paneId}:${nodeId}`,
     data: dragData,
   });
+
+  const fileKind = nodeType === "file" ? getFileViewKind({ name, mime_type: fileMimeType }) : null;
+  const icon =
+    isStreaming ? (
+      <Loader2 size={12} className="text-accent shrink-0 animate-spin" />
+    ) : nodeType === "file" ? (
+      fileKind === "image" ? (
+        <ImageIcon size={12} className="text-icon-folder shrink-0" />
+      ) : (
+        <FileText size={12} className="text-fg-muted shrink-0" />
+      )
+    ) : (
+      <MessageSquare size={12} className="text-icon-chat shrink-0" />
+    );
 
   return (
     <div
@@ -166,11 +187,7 @@ function DraggableTab({
       {...attributes}
       {...listeners}
     >
-      {isStreaming ? (
-        <Loader2 size={12} className="text-accent shrink-0 animate-spin" />
-      ) : (
-        <MessageSquare size={12} className="text-icon-chat shrink-0" />
-      )}
+      {icon}
       <span className="truncate">{name}</span>
       <button
         className="ml-auto shrink-0 rounded p-0.5 text-transparent group-hover:text-fg-muted hover:text-fg hover:bg-surface-hover transition-colors w-4 h-4 flex items-center justify-center"

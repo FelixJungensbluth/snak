@@ -2,10 +2,10 @@ import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 
 export interface PaneTabs {
-  /** Ordered list of chat IDs open in this pane */
-  chatIds: string[];
-  /** Which chat is currently active (or null if pane is empty) */
-  activeChatId: string | null;
+  /** Ordered list of node IDs open in this pane */
+  nodeIds: string[];
+  /** Which node is currently active (or null if pane is empty) */
+  activeNodeId: string | null;
 }
 
 export interface TabState {
@@ -14,86 +14,86 @@ export interface TabState {
 }
 
 export interface TabActions {
-  openTab: (paneId: string, chatId: string) => void;
-  closeTab: (paneId: string, chatId: string) => void;
-  setActiveTab: (paneId: string, chatId: string) => void;
-  moveTab: (fromPaneId: string, toPaneId: string, chatId: string) => void;
-  closeOtherTabs: (paneId: string, chatId: string) => void;
-  closeTabsToRight: (paneId: string, chatId: string) => void;
+  openTab: (paneId: string, nodeId: string) => void;
+  closeTab: (paneId: string, nodeId: string) => void;
+  setActiveTab: (paneId: string, nodeId: string) => void;
+  moveTab: (fromPaneId: string, toPaneId: string, nodeId: string) => void;
+  closeOtherTabs: (paneId: string, nodeId: string) => void;
+  closeTabsToRight: (paneId: string, nodeId: string) => void;
 }
 
 export const useTabStore = create<TabState & TabActions>()(
   immer((set) => ({
     panes: {},
 
-    openTab: (paneId, chatId) =>
+    openTab: (paneId, nodeId) =>
       set((state) => {
         if (!state.panes[paneId]) {
-          state.panes[paneId] = { chatIds: [], activeChatId: null };
+          state.panes[paneId] = { nodeIds: [], activeNodeId: null };
         }
         const pane = state.panes[paneId];
-        if (!pane.chatIds.includes(chatId)) {
-          pane.chatIds.push(chatId);
+        if (!pane.nodeIds.includes(nodeId)) {
+          pane.nodeIds.push(nodeId);
         }
-        pane.activeChatId = chatId;
+        pane.activeNodeId = nodeId;
       }),
 
-    closeTab: (paneId, chatId) =>
+    closeTab: (paneId, nodeId) =>
       set((state) => {
         const pane = state.panes[paneId];
         if (!pane) return;
-        pane.chatIds = pane.chatIds.filter((id) => id !== chatId);
-        if (pane.activeChatId === chatId) {
-          pane.activeChatId = pane.chatIds[pane.chatIds.length - 1] ?? null;
+        pane.nodeIds = pane.nodeIds.filter((id) => id !== nodeId);
+        if (pane.activeNodeId === nodeId) {
+          pane.activeNodeId = pane.nodeIds[pane.nodeIds.length - 1] ?? null;
         }
       }),
 
-    setActiveTab: (paneId, chatId) =>
+    setActiveTab: (paneId, nodeId) =>
       set((state) => {
         if (state.panes[paneId]) {
-          state.panes[paneId].activeChatId = chatId;
+          state.panes[paneId].activeNodeId = nodeId;
         }
       }),
 
-    moveTab: (fromPaneId, toPaneId, chatId) =>
+    moveTab: (fromPaneId, toPaneId, nodeId) =>
       set((state) => {
         const from = state.panes[fromPaneId];
         if (!from) return;
-        from.chatIds = from.chatIds.filter((id) => id !== chatId);
-        if (from.activeChatId === chatId) {
-          from.activeChatId = from.chatIds[from.chatIds.length - 1] ?? null;
+        from.nodeIds = from.nodeIds.filter((id) => id !== nodeId);
+        if (from.activeNodeId === nodeId) {
+          from.activeNodeId = from.nodeIds[from.nodeIds.length - 1] ?? null;
         }
 
         if (!state.panes[toPaneId]) {
-          state.panes[toPaneId] = { chatIds: [], activeChatId: null };
+          state.panes[toPaneId] = { nodeIds: [], activeNodeId: null };
         }
         const to = state.panes[toPaneId];
-        if (!to.chatIds.includes(chatId)) {
-          to.chatIds.push(chatId);
+        if (!to.nodeIds.includes(nodeId)) {
+          to.nodeIds.push(nodeId);
         }
-        to.activeChatId = chatId;
+        to.activeNodeId = nodeId;
       }),
 
-    closeOtherTabs: (paneId, chatId) =>
+    closeOtherTabs: (paneId, nodeId) =>
       set((state) => {
         const pane = state.panes[paneId];
         if (!pane) return;
-        pane.chatIds = [chatId];
-        pane.activeChatId = chatId;
+        pane.nodeIds = [nodeId];
+        pane.activeNodeId = nodeId;
       }),
 
-    closeTabsToRight: (paneId, chatId) =>
+    closeTabsToRight: (paneId, nodeId) =>
       set((state) => {
         const pane = state.panes[paneId];
         if (!pane) return;
-        const idx = pane.chatIds.indexOf(chatId);
+        const idx = pane.nodeIds.indexOf(nodeId);
         if (idx < 0) return;
-        pane.chatIds = pane.chatIds.slice(0, idx + 1);
+        pane.nodeIds = pane.nodeIds.slice(0, idx + 1);
         if (
-          pane.activeChatId !== null &&
-          !pane.chatIds.includes(pane.activeChatId)
+          pane.activeNodeId !== null &&
+          !pane.nodeIds.includes(pane.activeNodeId)
         ) {
-          pane.activeChatId = chatId;
+          pane.activeNodeId = nodeId;
         }
       }),
   }))

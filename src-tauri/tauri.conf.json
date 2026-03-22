@@ -18,6 +18,13 @@
       }
     ],
     "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": ["$HOME/**"],
+          "requireLiteralLeadingDot": false
+        }
+      },
       "csp": null
     }
   },

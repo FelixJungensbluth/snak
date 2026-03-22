@@ -10,7 +10,7 @@ import {
   type DragEndEvent,
   type DragOverEvent,
 } from "@dnd-kit/core";
-import { Folder, MessageSquare } from "lucide-react";
+import { Folder, MessageSquare, FileText } from "lucide-react";
 import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
@@ -20,14 +20,14 @@ import * as api from "../api/workspace";
 
 export interface TabDragData {
   type: "tab";
-  chatId: string;
+  nodeId: string;
   sourcePaneId: string;
 }
 
 export interface SidebarDragData {
   type: "sidebar-node";
   nodeId: string;
-  nodeType: "chat" | "folder";
+  nodeType: "chat" | "folder" | "file";
 }
 
 export type DragData = TabDragData | SidebarDragData;
@@ -137,8 +137,11 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
         splitPane(targetPaneId, splitDirection, newPaneId);
 
         if (drag.type === "tab") {
-          moveTab(drag.sourcePaneId, newPaneId, drag.chatId);
-        } else if (drag.type === "sidebar-node" && drag.nodeType === "chat") {
+          moveTab(drag.sourcePaneId, newPaneId, drag.nodeId);
+        } else if (
+          drag.type === "sidebar-node" &&
+          (drag.nodeType === "chat" || drag.nodeType === "file")
+        ) {
           openTab(newPaneId, drag.nodeId);
         }
         return;
@@ -208,14 +211,14 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
 
   // Overlay label
   let overlayName: string | null = null;
-  let overlayIcon: "chat" | "folder" = "chat";
+  let overlayIcon: "chat" | "folder" | "file" = "chat";
   if (activeDrag) {
     if (activeDrag.type === "tab") {
-      overlayName = workspaceIndex.byId.get(activeDrag.chatId)?.name ?? "Untitled";
+      overlayName = workspaceIndex.byId.get(activeDrag.nodeId)?.name ?? "Untitled";
     } else {
       const n = workspaceIndex.byId.get(activeDrag.nodeId);
       overlayName = n?.name ?? "Untitled";
-      overlayIcon = n?.type === "folder" ? "folder" : "chat";
+      overlayIcon = n?.type ?? "chat";
     }
   }
 
@@ -236,6 +239,8 @@ export function TabDndProvider({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-1.5 px-3 h-[28px] bg-surface-raised border border-border rounded shadow-lg text-xs text-fg opacity-90">
             {overlayIcon === "folder" ? (
               <Folder size={12} className="text-icon-folder" />
+            ) : overlayIcon === "file" ? (
+              <FileText size={12} className="text-fg-muted" />
             ) : (
               <MessageSquare size={12} className="text-icon-chat" />
             )}
