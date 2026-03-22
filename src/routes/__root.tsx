@@ -8,6 +8,7 @@ import { useSessionPersist } from "../hooks/useSessionPersist";
 import Onboarding from "../components/Onboarding";
 import Sidebar from "../components/Sidebar";
 import SettingsPanel from "../components/SettingsPanel";
+import { TabDndProvider } from "../components/TabDndContext";
 
 export const Route = createRootRoute({
   component: RootComponent,
@@ -57,22 +58,24 @@ function RootComponent() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden relative">
-      <Sidebar />
-      <main className="flex-1 overflow-hidden bg-bg">
-        <Outlet />
-      </main>
-      {!settingsOpen && (
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="absolute top-3 right-3 z-30 p-1 text-fg-muted hover:text-fg transition-colors"
-          title="Settings"
-          aria-label="Open settings"
-        >
-          <Settings size={14} />
-        </button>
-      )}
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-    </div>
+    <TabDndProvider>
+      <div className="flex h-screen overflow-hidden relative">
+        <Sidebar />
+        <main className="flex-1 overflow-hidden bg-bg">
+          <Outlet />
+        </main>
+        {!settingsOpen && (
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="absolute top-3 right-3 z-30 p-1 text-fg-muted hover:text-fg transition-colors"
+            title="Settings"
+            aria-label="Open settings"
+          >
+            <Settings size={14} />
+          </button>
+        )}
+        <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      </div>
+    </TabDndProvider>
   );
 }

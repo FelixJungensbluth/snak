@@ -388,6 +388,98 @@ pub fn delete_node(
     db::delete_node(conn, &id).map_err(|e| e.to_string())
 }
 
+// ── Move / reorder ──────────────────────────────────────────────────────────
+
+/// Move a node to a new parent and/or position.
+/// `sibling_ids` is the full ordered list of sibling IDs in the target parent after the move.
+#[tauri::command]
+pub fn move_node(
+    workspace_root: String,
+    id: String,
+    new_parent_id: Option<String>,
+    sibling_ids: Vec<String>,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
+    let guard = state.0.lock().unwrap();
+    let conn = guard.as_ref().ok_or("No workspace open")?;
+
+    // Prevent moving a folder into itself or its own descendant
+    if let Some(ref target_parent) = new_parent_id {
+        if target_parent == &id {
+            return Err("Cannot move a node into itself".to_string());
+        }
+        // Walk up from target_parent to root to ensure no cycle
+        let mut cursor = Some(target_parent.clone());
+        while let Some(ref pid) = cursor {
+            let parent: Option<String> = conn
+                .query_row(
+                    "SELECT parent_id FROM nodes WHERE id = ?1",
+                    rusqlite::params![pid],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if parent.as_deref() == Some(&id) {
+                return Err("Cannot move a node into its own descendant".to_string());
+            }
+            cursor = parent;
+        }
+    }
+
+    // Find the new order_idx from position in sibling_ids
+    let new_order_idx = sibling_ids
+        .iter()
+        .position(|s| s == &id)
+        .unwrap_or(0) as i64;
+
+    // Move the chat .md file on disk if parent changed
+    let old_parent_id: Option<String> = conn
+        .query_row(
+            "SELECT parent_id FROM nodes WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let node_type: String = conn
+        .query_row(
+            "SELECT type FROM nodes WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    if old_parent_id != new_parent_id {
+        let old_dir = node_dir_for_parent(&workspace_root, old_parent_id.as_deref(), conn)?;
+        let new_dir = node_dir_for_parent(&workspace_root, new_parent_id.as_deref(), conn)?;
+        fs::create_dir_all(&new_dir).map_err(|e| e.to_string())?;
+
+        match node_type.as_str() {
+            "chat" => {
+                let filename = format!("{id}.md");
+                let old_path = old_dir.join(&filename);
+                let new_path = new_dir.join(&filename);
+                if old_path.exists() {
+                    fs::rename(&old_path, &new_path).map_err(|e| e.to_string())?;
+                }
+            }
+            "folder" => {
+                let old_path = old_dir.join(&id);
+                let new_path = new_dir.join(&id);
+                if old_path.exists() {
+                    fs::rename(&old_path, &new_path).map_err(|e| e.to_string())?;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    db::move_node(conn, &id, new_parent_id.as_deref(), new_order_idx)
+        .map_err(|e| e.to_string())?;
+    db::reorder_siblings(conn, &sibling_ids).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 // ── Read chat file ──────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Serialize)]
