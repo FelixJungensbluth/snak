@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { X, MessageSquare, PanelRight, PanelBottom, XCircle } from "lucide-react";
+import { X, MessageSquare, PanelRight, PanelBottom, XCircle, Loader2 } from "lucide-react";
 import { useDraggable } from "@dnd-kit/core";
 import { useTabStore } from "../stores/tabStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { usePaneStore } from "../stores/paneStore";
+import { useChatStore } from "../stores/chatStore";
 import type { TabDragData } from "./TabDndContext";
 
 interface TabBarProps {
@@ -20,6 +21,7 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
   const openTab = useTabStore((s) => s.openTab);
   const nodes = useWorkspaceStore((s) => s.nodes);
   const splitPane = usePaneStore((s) => s.splitPane);
+  const chats = useChatStore((s) => s.chats);
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; chatId: string } | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
@@ -70,6 +72,7 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
             name={name}
             isActive={isActive}
             isFocused={isFocused}
+            isStreaming={chats[chatId]?.streaming ?? false}
             onActivate={() => setActiveTab(paneId, chatId)}
             onClose={() => closeTab(paneId, chatId)}
             onContextMenu={(e) => {
@@ -101,6 +104,14 @@ export default function TabBar({ paneId, isFocused }: TabBarProps) {
           />
           <div className="my-0.5 border-t border-border-strong" />
           <TabCtxItem
+            icon={<X size={12} />}
+            label="Close"
+            onClick={() => {
+              closeTab(paneId, ctxMenu.chatId);
+              setCtxMenu(null);
+            }}
+          />
+          <TabCtxItem
             icon={<XCircle size={12} />}
             label="Close Other Tabs"
             onClick={() => {
@@ -128,6 +139,7 @@ function DraggableTab({
   name,
   isActive,
   isFocused,
+  isStreaming,
   onActivate,
   onClose,
   onContextMenu,
@@ -137,6 +149,7 @@ function DraggableTab({
   name: string;
   isActive: boolean;
   isFocused?: boolean;
+  isStreaming?: boolean;
   onActivate: () => void;
   onClose: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -160,7 +173,11 @@ function DraggableTab({
       {...attributes}
       {...listeners}
     >
-      <MessageSquare size={12} className="text-icon-chat shrink-0" />
+      {isStreaming ? (
+        <Loader2 size={12} className="text-accent shrink-0 animate-spin" />
+      ) : (
+        <MessageSquare size={12} className="text-icon-chat shrink-0" />
+      )}
       <span className="truncate">{name}</span>
       <button
         className="ml-auto shrink-0 rounded p-0.5 text-transparent group-hover:text-fg-muted hover:text-fg hover:bg-surface-hover transition-colors w-4 h-4 flex items-center justify-center"

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Send, Square, Paperclip, X, FileText, FileCode } from "lucide-react";
+import { Send, Square, Paperclip, X, FileText, FileCode, Bot, User } from "lucide-react";
 import { type Chat, type Message, type Attachment } from "../stores/chatStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useUiStore } from "../stores/uiStore";
@@ -240,11 +240,12 @@ export default function ChatView({ chatId }: ChatViewProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Message list */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
         {chat.messages.length === 0 && (
-          <p className="text-xs text-fg-dim text-center mt-8">
-            No messages yet. Start the conversation below.
-          </p>
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-fg-dim">
+            <Bot size={28} className="opacity-40" />
+            <p className="text-xs">Start the conversation below.</p>
+          </div>
         )}
         {chat.messages.map((msg, i) => (
           <div key={msg.id} data-msg-id={msg.id}>
@@ -259,9 +260,10 @@ export default function ChatView({ chatId }: ChatViewProps) {
           </div>
         ))}
         {streamError && (
-          <div className="flex justify-start">
-            <div className="max-w-[75%] px-3 py-2 text-xs leading-relaxed bg-surface-raised text-fg-error">
-              Error: {streamError}
+          <div className="flex gap-2.5 pr-12">
+            <div className="w-6 shrink-0" />
+            <div className="text-[12px] text-fg-error bg-fg-error/10 rounded-lg px-3 py-2">
+              {streamError}
             </div>
           </div>
         )}
@@ -406,45 +408,54 @@ const MessageBubble = memo(function MessageBubble({
 }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
-  const isAssistant = message.role === "assistant";
 
   const imageAttachments = message.attachments?.filter((a) => a.type === "image") ?? [];
   const displayContent = imageAttachments.length > 0 ? stripImageMarkdown(message.content) : message.content;
 
+  if (isSystem) {
+    return (
+      <div className="flex justify-center px-8 py-1">
+        <span className="text-[11px] text-fg-dim italic text-center whitespace-pre-wrap">
+          {displayContent}
+        </span>
+      </div>
+    );
+  }
+
+  if (isUser) {
+    return (
+      <div className="flex justify-end gap-2.5 pl-12">
+        <div className="max-w-[75%] flex flex-col items-end gap-1">
+          {/* Image attachments */}
+          {imageAttachments.map((att, i) => (
+            <AttachmentImage key={`${att.path}-${i}`} attachment={att} />
+          ))}
+          <div className="bg-accent/90 text-fg px-3.5 py-2.5 rounded-2xl rounded-br-sm text-[13px] leading-relaxed">
+            {displayContent && <span className="whitespace-pre-wrap">{displayContent}</span>}
+          </div>
+        </div>
+        <div className="w-6 h-6 rounded-full bg-accent/20 flex items-center justify-center shrink-0 mt-0.5">
+          <User size={13} className="text-accent" />
+        </div>
+      </div>
+    );
+  }
+
+  // Assistant message — full width, no bubble background
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[75%] px-3 py-2 text-xs leading-relaxed ${
-          isUser
-            ? "bg-accent text-fg"
-            : isSystem
-              ? "bg-surface-raised text-fg-muted italic whitespace-pre-wrap"
-              : "bg-surface-raised text-fg markdown-body"
-        }`}
-      >
-        {/* Render image attachments */}
+    <div className="flex gap-2.5 pr-12">
+      <div className="w-6 h-6 rounded-full bg-surface-raised flex items-center justify-center shrink-0 mt-0.5">
+        <Bot size={13} className="text-icon-chat" />
+      </div>
+      <div className="min-w-0 flex-1 text-fg text-[13px] leading-relaxed markdown-body">
+        {/* Image attachments */}
         {imageAttachments.map((att, i) => (
           <AttachmentImage key={`${att.path}-${i}`} attachment={att} />
         ))}
-
-        {isAssistant ? (
-          <>
-            <Suspense fallback={<span className="whitespace-pre-wrap">{displayContent}</span>}>
-              <MarkdownRenderer content={displayContent} />
-            </Suspense>
-            {isStreaming && <StreamingCursor />}
-          </>
-        ) : isUser ? (
-          <>
-            {displayContent && <span className="whitespace-pre-wrap">{displayContent}</span>}
-            {isStreaming && <StreamingCursor />}
-          </>
-        ) : (
-          <>
-            {displayContent}
-            {isStreaming && <StreamingCursor />}
-          </>
-        )}
+        <Suspense fallback={<span className="whitespace-pre-wrap">{displayContent}</span>}>
+          <MarkdownRenderer content={displayContent} />
+        </Suspense>
+        {isStreaming && <StreamingCursor />}
       </div>
     </div>
   );
@@ -452,7 +463,7 @@ const MessageBubble = memo(function MessageBubble({
 
 function StreamingCursor() {
   return (
-    <span className="inline-block w-[6px] h-[14px] bg-fg-muted ml-0.5 align-text-bottom animate-pulse" />
+    <span className="inline-block w-[5px] h-[15px] bg-accent rounded-sm ml-0.5 align-text-bottom animate-pulse" />
   );
 }
 

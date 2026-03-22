@@ -11,6 +11,8 @@ pub struct DbState(pub Mutex<Option<rusqlite::Connection>>);
 
 const WORKSPACE_STORE: &str = "workspace.bin";
 const WORKSPACE_PATH_KEY: &str = "workspace_path";
+const RECENT_WORKSPACES_KEY: &str = "recent_workspaces";
+const MAX_RECENT_WORKSPACES: usize = 10;
 
 // ── Health / open ────────────────────────────────────────────────────────────
 
@@ -43,10 +45,25 @@ pub fn db_health(state: State<'_, DbState>) -> Result<DbHealthResponse, String> 
 // ── Workspace path persistence ───────────────────────────────────────────────
 
 /// Persist the workspace root path to the store so it survives relaunches.
+/// Also adds the path to the recent workspaces list.
 #[tauri::command]
 pub fn save_workspace(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let store = app.store(WORKSPACE_STORE).map_err(|e| e.to_string())?;
-    store.set(WORKSPACE_PATH_KEY, serde_json::Value::String(path));
+    store.set(WORKSPACE_PATH_KEY, serde_json::Value::String(path.clone()));
+
+    // Update recent workspaces list (most recent first, dedup, cap at MAX)
+    let mut recents: Vec<String> = store
+        .get(RECENT_WORKSPACES_KEY)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    recents.retain(|p| p != &path);
+    recents.insert(0, path);
+    recents.truncate(MAX_RECENT_WORKSPACES);
+    store.set(
+        RECENT_WORKSPACES_KEY,
+        serde_json::to_value(&recents).unwrap(),
+    );
+
     store.save().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -58,6 +75,34 @@ pub fn get_saved_workspace(app: tauri::AppHandle) -> Result<Option<String>, Stri
     Ok(store
         .get(WORKSPACE_PATH_KEY)
         .and_then(|v| v.as_str().map(|s| s.to_string())))
+}
+
+/// Retrieve the list of recently opened workspace paths (most recent first).
+#[tauri::command]
+pub fn get_recent_workspaces(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let store = app.store(WORKSPACE_STORE).map_err(|e| e.to_string())?;
+    let recents: Vec<String> = store
+        .get(RECENT_WORKSPACES_KEY)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    Ok(recents)
+}
+
+/// Remove a path from the recent workspaces list.
+#[tauri::command]
+pub fn remove_recent_workspace(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let store = app.store(WORKSPACE_STORE).map_err(|e| e.to_string())?;
+    let mut recents: Vec<String> = store
+        .get(RECENT_WORKSPACES_KEY)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    recents.retain(|p| p != &path);
+    store.set(
+        RECENT_WORKSPACES_KEY,
+        serde_json::to_value(&recents).unwrap(),
+    );
+    store.save().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ── Node CRUD ────────────────────────────────────────────────────────────────

@@ -49,9 +49,9 @@ const MD_COMPONENTS = {
   pre({ children }: { children?: React.ReactNode }) {
     const code = extractText(children);
     return (
-      <div className="relative group my-2">
+      <div className="relative group my-3">
         <CopyButton code={code} />
-        <pre className="overflow-x-auto rounded bg-bg p-3 text-[12px] leading-[1.5]">
+        <pre className="overflow-x-auto rounded-lg bg-bg border border-border p-3.5 text-[12px] leading-[1.6]">
           {children}
         </pre>
       </div>
@@ -67,7 +67,7 @@ const MD_COMPONENTS = {
       );
     }
     return (
-      <code className="bg-bg px-1 py-0.5 rounded text-[12px]" {...props}>
+      <code className="bg-surface-raised px-1.5 py-0.5 rounded text-[12px] border border-border" {...props}>
         {children}
       </code>
     );

@@ -186,6 +186,14 @@ export function listNodes() {
   return invoke<WorkspaceNode[]>("list_nodes");
 }
 
+export function getRecentWorkspaces() {
+  return invoke<string[]>("get_recent_workspaces");
+}
+
+export function removeRecentWorkspace(path: string) {
+  return invoke("remove_recent_workspace", { path });
+}
+
 export function reindexAllChats(workspaceRoot: string) {
   return invoke("reindex_all_chats", { workspaceRoot });
 }

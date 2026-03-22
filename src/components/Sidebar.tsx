@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import { Plus, FolderPlus, Sparkles, Settings } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Plus, FolderPlus, Settings, FolderOpen, X } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import * as api from "../api/workspace";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -7,7 +8,7 @@ import { useTabStore } from "../stores/tabStore";
 import { usePaneStore } from "../stores/paneStore";
 import { useUiStore } from "../stores/uiStore";
 import FileTree from "./FileTree";
-import { seedDemoChat } from "../seedDemo";
+
 
 const MIN_WIDTH = 140;
 const MAX_WIDTH = 480;
@@ -49,6 +50,53 @@ export default function Sidebar() {
   const [creating, setCreating] = useState(false);
   const [bgCtxMenu, setBgCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const bgCtxRef = useRef<HTMLDivElement>(null);
+
+  // Recent workspaces
+  const [recentMenuOpen, setRecentMenuOpen] = useState(false);
+  const [recentPaths, setRecentPaths] = useState<string[]>([]);
+  const recentMenuRef = useRef<HTMLDivElement>(null);
+  const recentBtnRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!recentMenuOpen) return;
+    api.getRecentWorkspaces().then(setRecentPaths).catch(console.error);
+    const handler = (e: MouseEvent) => {
+      if (
+        !recentMenuRef.current?.contains(e.target as Node) &&
+        !recentBtnRef.current?.contains(e.target as Node)
+      ) {
+        setRecentMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [recentMenuOpen]);
+
+  async function switchWorkspace(path: string) {
+    setRecentMenuOpen(false);
+    try {
+      await api.saveWorkspace(path);
+      await api.openWorkspace(path + "/snak.db");
+      const nodes = await api.listNodes();
+      useWorkspaceStore.getState().setNodes(nodes);
+      useWorkspaceStore.getState().setRootPath(path);
+    } catch (e) {
+      console.error("Failed to switch workspace:", e);
+    }
+  }
+
+  async function openNewWorkspace() {
+    setRecentMenuOpen(false);
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || typeof dir !== "string") return;
+    await switchWorkspace(dir);
+  }
+
+  async function removeRecent(e: React.MouseEvent, path: string) {
+    e.stopPropagation();
+    await api.removeRecentWorkspace(path);
+    setRecentPaths((prev) => prev.filter((p) => p !== path));
+  }
 
   // ── resize logic ────────────────────────────────────────────────────────
 
@@ -100,32 +148,6 @@ export default function Sidebar() {
     }
   }
 
-  // ── seed demo chat ─────────────────────────────────────────────────────
-  async function createDemoChat() {
-    if (!rootPath || creating) return;
-    setBgCtxMenu(null);
-    setCreating(true);
-    try {
-      const result = await seedDemoChat(rootPath);
-      upsertNode({
-        id: result.id,
-        type: "chat" as const,
-        name: result.name,
-        parent_id: result.parent_id,
-        order_idx: result.order_idx,
-        is_archived: result.is_archived,
-        provider: result.provider,
-        model: result.model,
-        last_message: result.last_message,
-      });
-      openTab(focusedPaneId, result.id);
-    } catch (e) {
-      console.error("create demo chat failed:", e);
-    } finally {
-      setCreating(false);
-    }
-  }
-
   // ── background right-click (empty area) ─────────────────────────────────
 
   function handleBgContext(e: React.MouseEvent) {
@@ -171,8 +193,62 @@ export default function Sidebar() {
         )}
       </div>
 
-      {/* settings button */}
-      <div className="border-t border-border px-2 py-1.5">
+      {/* footer buttons */}
+      <div className="border-t border-border px-2 py-1.5 relative">
+        <button
+          ref={recentBtnRef}
+          onClick={() => setRecentMenuOpen(!recentMenuOpen)}
+          className={`w-full flex items-center gap-2 px-2 py-1.5 text-[11px] rounded-md transition-colors ${
+            recentMenuOpen
+              ? "text-fg bg-surface-hover"
+              : "text-fg-dim hover:text-fg hover:bg-surface-hover/70"
+          }`}
+        >
+          <FolderOpen size={13} />
+          <span>Recent Workspaces</span>
+        </button>
+
+        {/* recent workspaces dropdown */}
+        {recentMenuOpen && (
+          <div
+            ref={recentMenuRef}
+            className="absolute bottom-full left-2 right-2 mb-1 bg-surface-raised border border-border-strong rounded-lg shadow-2xl py-1 max-h-[240px] overflow-y-auto z-50"
+          >
+            <button
+              className="w-full text-left px-2.5 py-1.5 text-[11px] flex items-center gap-2 text-fg hover:bg-surface-hover rounded-md mx-0.5 transition-colors"
+              style={{ width: "calc(100% - 4px)" }}
+              onClick={openNewWorkspace}
+            >
+              <Plus size={11} className="text-fg-muted shrink-0" />
+              <span>Open Workspace…</span>
+            </button>
+            {recentPaths.filter((p) => p !== rootPath).length > 0 && (
+              <div className="border-t border-border mx-2 my-1" />
+            )}
+            {recentPaths
+                .filter((p) => p !== rootPath)
+                .map((path) => (
+                  <button
+                    key={path}
+                    className="w-full text-left px-2.5 py-1.5 text-[11px] flex items-center gap-2 text-fg hover:bg-surface-hover rounded-md mx-0.5 transition-colors group/recent"
+                    style={{ width: "calc(100% - 4px)" }}
+                    onClick={() => switchWorkspace(path)}
+                  >
+                    <FolderOpen size={11} className="text-fg-muted shrink-0" />
+                    <span className="truncate flex-1" title={path}>
+                      {path.split("/").pop() || path}
+                    </span>
+                    <span
+                      className="shrink-0 text-transparent group-hover/recent:text-fg-muted hover:!text-fg p-0.5 rounded"
+                      onMouseDown={(e) => removeRecent(e, path)}
+                    >
+                      <X size={10} />
+                    </span>
+                  </button>
+                ))}
+          </div>
+        )}
+
         <button
           onClick={() => setSettingsOpen(!settingsOpen)}
           className={`w-full flex items-center gap-2 px-2 py-1.5 text-[11px] rounded-md transition-colors ${
@@ -208,12 +284,6 @@ export default function Sidebar() {
             icon={<FolderPlus size={12} />}
             label="New Folder"
             onClick={() => createNode("folder")}
-          />
-          <div className="border-t border-border mx-2 my-1" />
-          <BgCtxItem
-            icon={<Sparkles size={12} />}
-            label="Create Demo Chat"
-            onClick={createDemoChat}
           />
         </div>
       )}

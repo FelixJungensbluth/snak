@@ -4,7 +4,9 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import * as api from "../api/workspace";
 import { useUiStore } from "../stores/uiStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import { useSessionPersist } from "../hooks/useSessionPersist";
+import { applyTheme } from "../themes";
 
 const Onboarding = lazy(() => import("../components/Onboarding"));
 const WorkspaceChrome = lazy(() => import("../components/WorkspaceChrome"));
@@ -22,6 +24,11 @@ function RootComponent() {
 
   // Session persistence (save/restore pane layout, tabs, scroll positions)
   useSessionPersist();
+
+  // Apply saved theme on mount
+  useEffect(() => {
+    applyTheme(useSettingsStore.getState().theme);
+  }, []);
 
   // Global keyboard shortcuts
   useEffect(() => {

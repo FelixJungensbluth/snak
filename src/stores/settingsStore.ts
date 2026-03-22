@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-
-export type Theme = "dark" | "light";
+import { applyTheme } from "../themes";
 
 export interface ProviderConfig {
   /** API key is stored in OS keychain via Tauri — this is just a display flag */
@@ -10,7 +9,8 @@ export interface ProviderConfig {
 }
 
 export interface SettingsState {
-  theme: Theme;
+  /** Theme ID (e.g. "dark", "gruvbox-dark", "catppuccin-mocha", "nord") */
+  theme: string;
   /** Default provider for new chats */
   defaultProvider: string;
   /** Default model for new chats */
@@ -26,7 +26,7 @@ export interface SettingsState {
 }
 
 export interface SettingsActions {
-  setTheme: (theme: Theme) => void;
+  setTheme: (themeId: string) => void;
   setDefaultProvider: (provider: string) => void;
   setDefaultModel: (model: string) => void;
   setDefaultSystemPrompt: (prompt: string) => void;
@@ -59,9 +59,10 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
     },
     shortcuts: defaultShortcuts,
 
-    setTheme: (theme) =>
+    setTheme: (themeId) =>
       set((state) => {
-        state.theme = theme;
+        state.theme = themeId;
+        applyTheme(themeId);
       }),
 
     setDefaultProvider: (provider) =>

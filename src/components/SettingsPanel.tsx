@@ -4,8 +4,11 @@ import * as api from "../api/workspace";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useUiStore } from "../stores/uiStore";
 import { PROVIDERS, PROVIDER_MODELS } from "../providers";
+import { THEMES } from "../themes";
 
 export default function SettingsPanel() {
+  const currentTheme = useSettingsStore((s) => s.theme);
+  const setTheme = useSettingsStore((s) => s.setTheme);
   const defaultProvider = useSettingsStore((s) => s.defaultProvider);
   const defaultTemperature = useSettingsStore((s) => s.defaultTemperature);
   const defaultMaxTokens = useSettingsStore((s) => s.defaultMaxTokens);
@@ -118,6 +121,46 @@ export default function SettingsPanel() {
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-[520px] mx-auto space-y-8">
+          {/* ── Theme ──────────────────────────────────────────────────── */}
+          <section>
+            <h2 className="text-xs font-medium text-fg uppercase tracking-wider mb-4">
+              Theme
+            </h2>
+            <div className="grid grid-cols-4 gap-1.5">
+              {THEMES.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setTheme(t.id)}
+                  className={`group relative py-2 px-2 rounded text-xs text-center transition-colors ${
+                    currentTheme === t.id
+                      ? "ring-2 ring-accent"
+                      : "border border-border hover:border-border-strong"
+                  }`}
+                  title={t.name}
+                >
+                  {/* Color preview dots */}
+                  <div className="flex justify-center gap-1 mb-1.5">
+                    <span
+                      className="w-3 h-3 rounded-full border border-black/20"
+                      style={{ background: t.colors.bg }}
+                    />
+                    <span
+                      className="w-3 h-3 rounded-full border border-black/20"
+                      style={{ background: t.colors.accent }}
+                    />
+                    <span
+                      className="w-3 h-3 rounded-full border border-black/20"
+                      style={{ background: t.colors.fg }}
+                    />
+                  </div>
+                  <span className="text-fg-muted group-hover:text-fg text-[10px]">
+                    {t.name}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
           {/* ── Provider ──────────────────────────────────────────────── */}
           <section>
             <h2 className="text-xs font-medium text-fg uppercase tracking-wider mb-4">
