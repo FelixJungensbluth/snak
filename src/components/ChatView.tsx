@@ -5,13 +5,11 @@ import { Send, Square } from "lucide-react";
 import { useChatStore, type Chat, type Message } from "../stores/chatStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useSessionStore } from "../stores/sessionStore";
 import ChatSettings from "./ChatSettings";
 import ModelSelector from "./ModelSelector";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { MODEL_CONTEXT_LIMITS, estimateTokens } from "../providers";
-
-// Persists scroll positions across chat switches (module-level, survives re-renders)
-const scrollPositions = new Map<string, number>();
 
 interface ChatViewProps {
   chatId: string;
@@ -27,6 +25,8 @@ export default function ChatView({ chatId }: ChatViewProps) {
   const rootPath = useWorkspaceStore((s) => s.rootPath);
   const upsertNode = useWorkspaceStore((s) => s.upsertNode);
   const renameChat = useChatStore((s) => s.renameChat);
+  const setScrollPosition = useSessionStore((s) => s.setScrollPosition);
+  const scrollPositions = useSessionStore((s) => s.scrollPositions);
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -91,7 +91,7 @@ export default function ChatView({ chatId }: ChatViewProps) {
 
     if (isInitialLoad.current) {
       isInitialLoad.current = false;
-      const saved = scrollPositions.get(chatId);
+      const saved = scrollPositions[chatId];
       if (saved != null) {
         el.scrollTop = saved;
       } else {
@@ -115,15 +115,15 @@ export default function ChatView({ chatId }: ChatViewProps) {
     if (!el) return;
 
     const onScroll = () => {
-      scrollPositions.set(chatId, el.scrollTop);
+      setScrollPosition(chatId, el.scrollTop);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
 
     return () => {
       el.removeEventListener("scroll", onScroll);
-      scrollPositions.set(chatId, el.scrollTop);
+      setScrollPosition(chatId, el.scrollTop);
     };
-  }, [chatId]);
+  }, [chatId, setScrollPosition]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();

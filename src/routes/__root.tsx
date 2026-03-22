@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Settings } from "lucide-react";
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
 import { useUiStore } from "../stores/uiStore";
+import { useSessionPersist } from "../hooks/useSessionPersist";
 import Onboarding from "../components/Onboarding";
 import Sidebar from "../components/Sidebar";
 import SettingsPanel from "../components/SettingsPanel";
@@ -17,6 +18,9 @@ function RootComponent() {
   const settingsOpen = useUiStore((s) => s.settingsOpen);
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
   const [initialized, setInitialized] = useState(false);
+
+  // Session persistence (save/restore pane layout, tabs, scroll positions)
+  useSessionPersist();
 
   useEffect(() => {
     async function restoreWorkspace() {

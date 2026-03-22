@@ -613,6 +613,28 @@ pub fn update_chat_model_config(
     Ok(())
 }
 
+// ── Session persistence ─────────────────────────────────────────────────────
+
+/// Save session JSON to `<workspace>/.snak/session.json`.
+#[tauri::command]
+pub fn save_session(workspace_root: String, json: String) -> Result<(), String> {
+    let dir = Path::new(&workspace_root).join(".snak");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join("session.json"), json).map_err(|e| e.to_string())
+}
+
+/// Load session JSON from `<workspace>/.snak/session.json`. Returns `null` if not found.
+#[tauri::command]
+pub fn load_session(workspace_root: String) -> Result<Option<String>, String> {
+    let file = Path::new(&workspace_root).join(".snak").join("session.json");
+    if !file.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(&file)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
 // ── FTS ──────────────────────────────────────────────────────────────────────
 
 /// Index a message in the FTS table.

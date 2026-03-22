@@ -4,7 +4,7 @@ import { ChevronDown } from "lucide-react";
 import { useChatStore } from "../stores/chatStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
-import { PROVIDER_LABELS, PROVIDER_MODELS } from "../providers";
+import { PROVIDERS, PROVIDER_LABELS, PROVIDER_MODELS } from "../providers";
 
 interface ModelSelectorProps {
   chatId: string;
@@ -46,55 +46,67 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
     [rootPath, chatId]
   );
 
-  const handleSelect = useCallback(
+  // Per-chat provider override: falls back to global default
+  const chatProvider = chat?.provider || defaultProvider;
+
+  const handleSelectModel = useCallback(
     (model: string) => {
       if (!chat) return;
       updateModelConfig(
         chatId,
-        defaultProvider,
+        chatProvider,
         model,
         chat.temperature,
         chat.max_tokens
       );
-      void persistConfig(defaultProvider, model);
+      void persistConfig(chatProvider, model);
       setOpen(false);
     },
-    [chatId, chat, defaultProvider, updateModelConfig, persistConfig]
+    [chatId, chat, chatProvider, updateModelConfig, persistConfig]
   );
 
-  const providerModels = PROVIDER_MODELS[defaultProvider] || [];
-  const fallbackModel = providerModels.includes(defaultModel)
-    ? defaultModel
-    : providerModels[0] || "";
-  const activeModel = !chat
-    ? fallbackModel
-    : chat.provider === defaultProvider && providerModels.includes(chat.model)
-      ? chat.model
-      : fallbackModel || chat.model;
-  const providerLabel = PROVIDER_LABELS[defaultProvider] || defaultProvider;
+  const handleSelectProvider = useCallback(
+    (providerId: string) => {
+      if (!chat) return;
+      const models = PROVIDER_MODELS[providerId] || [];
+      const model = models[0] || "";
+      updateModelConfig(
+        chatId,
+        providerId,
+        model,
+        chat.temperature,
+        chat.max_tokens
+      );
+      void persistConfig(providerId, model);
+    },
+    [chatId, chat, updateModelConfig, persistConfig]
+  );
 
-  // Provider is controlled in global settings; keep this chat aligned.
+  const providerModels = PROVIDER_MODELS[chatProvider] || [];
+  const activeModel = !chat
+    ? defaultModel
+    : providerModels.includes(chat.model)
+      ? chat.model
+      : providerModels[0] || chat.model;
+  const providerLabel = PROVIDER_LABELS[chatProvider] || chatProvider;
+
+  // Sync model if provider changed externally
   useEffect(() => {
     if (!chat) return;
-    if (
-      chat.provider === defaultProvider &&
-      chat.model === activeModel
-    ) {
-      return;
-    }
+    if (chat.model === activeModel && chat.provider === chatProvider) return;
     updateModelConfig(
       chatId,
-      defaultProvider,
+      chatProvider,
       activeModel,
       chat.temperature,
       chat.max_tokens
     );
-    void persistConfig(defaultProvider, activeModel);
+    void persistConfig(chatProvider, activeModel);
   }, [
     chat,
     chatId,
     activeModel,
-    defaultProvider,
+    chatProvider,
     updateModelConfig,
     persistConfig,
   ]);
@@ -119,14 +131,28 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
       </button>
 
       {open && (
-        <div className="absolute bottom-full left-0 mb-1 z-50 bg-surface-raised border border-border-strong rounded shadow-xl py-1 min-w-[220px] max-h-[320px] overflow-y-auto">
-          <div className="px-3 py-1 text-[10px] text-fg-dim uppercase tracking-wider">
-            {providerLabel}
+        <div className="absolute bottom-full left-0 mb-1 z-50 bg-surface-raised border border-border-strong rounded shadow-xl py-1 min-w-[220px] max-h-[360px] overflow-y-auto">
+          {/* Provider row */}
+          <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border mb-1">
+            {PROVIDERS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => handleSelectProvider(p.id)}
+                className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
+                  chatProvider === p.id
+                    ? "bg-accent text-fg"
+                    : "text-fg-muted hover:bg-surface-hover"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
           </div>
+          {/* Model list */}
           {providerModels.map((model) => (
             <button
               key={model}
-              onClick={() => handleSelect(model)}
+              onClick={() => handleSelectModel(model)}
               className={`w-full text-left px-3 py-1 text-xs hover:bg-accent-selection transition-colors ${
                 activeModel === model
                   ? "text-accent-hover bg-accent-selection/50"
