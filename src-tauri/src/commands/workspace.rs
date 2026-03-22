@@ -265,11 +265,70 @@ pub fn create_folder(
 
 // ── Rename / Archive / Delete ─────────────────────────────────────────────────
 
-/// Rename a node: updates only the SQLite display name.
+/// Rename a node: updates the SQLite display name and the `.md` file frontmatter (for chats).
 #[tauri::command]
-pub fn rename_node(id: String, new_name: String, state: State<'_, DbState>) -> Result<(), String> {
+pub fn rename_node(
+    workspace_root: String,
+    id: String,
+    new_name: String,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
     let guard = state.0.lock().unwrap();
     let conn = guard.as_ref().ok_or("No workspace open")?;
+
+    // Update the .md frontmatter for chats
+    let node_type: String = conn
+        .query_row(
+            "SELECT type FROM nodes WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    if node_type == "chat" {
+        let parent_id: Option<String> = conn
+            .query_row(
+                "SELECT parent_id FROM nodes WHERE id = ?1",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        let dir = node_dir_for_parent(&workspace_root, parent_id.as_deref(), conn)?;
+        let file_path = dir.join(format!("{id}.md"));
+
+        if file_path.exists() {
+            let raw = fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
+            if raw.starts_with("---") {
+                if let Some(end) = raw[3..].find("---") {
+                    let fm = &raw[3..3 + end];
+                    let body = &raw[3 + end + 3..];
+
+                    let mut lines: Vec<String> = Vec::new();
+                    let mut has_name = false;
+                    for line in fm.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        if trimmed.starts_with("name:") {
+                            lines.push(format!("name: {new_name}"));
+                            has_name = true;
+                        } else {
+                            lines.push(trimmed.to_string());
+                        }
+                    }
+                    if !has_name {
+                        lines.push(format!("name: {new_name}"));
+                    }
+
+                    let updated = format!("---\n{}\n---{}", lines.join("\n"), body);
+                    fs::write(&file_path, updated).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
+
     db::rename_node(conn, &id, &new_name).map_err(|e| e.to_string())
 }
 

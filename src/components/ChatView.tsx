@@ -8,6 +8,10 @@ import { useSettingsStore } from "../stores/settingsStore";
 import ChatSettings from "./ChatSettings";
 import ModelSelector from "./ModelSelector";
 import MarkdownRenderer from "./MarkdownRenderer";
+import { MODEL_CONTEXT_LIMITS, estimateTokens } from "../providers";
+
+// Persists scroll positions across chat switches (module-level, survives re-renders)
+const scrollPositions = new Map<string, number>();
 
 interface ChatViewProps {
   chatId: string;
@@ -21,14 +25,19 @@ export default function ChatView({ chatId }: ChatViewProps) {
   const finalizeStream = useChatStore((s) => s.finalizeStream);
   const setStreaming = useChatStore((s) => s.setStreaming);
   const rootPath = useWorkspaceStore((s) => s.rootPath);
+  const upsertNode = useWorkspaceStore((s) => s.upsertNode);
+  const renameChat = useChatStore((s) => s.renameChat);
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
 
+  const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const isInitialLoad = useRef(true);
+  const prevMessageCount = useRef(0);
 
   // Load chat from .md file if not already in store
   useEffect(() => {
@@ -70,11 +79,51 @@ export default function ChatView({ chatId }: ChatViewProps) {
       .finally(() => setLoading(false));
   }, [chatId, chat, rootPath, loadChat]);
 
-  // Scroll to bottom on new messages or streaming updates
-  const streamBuffer = chat?.streamBuffer;
+  // Restore saved scroll position when switching chats; scroll to bottom on load
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat?.messages.length, streamBuffer]);
+    isInitialLoad.current = true;
+    prevMessageCount.current = 0;
+  }, [chatId]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !chat) return;
+
+    if (isInitialLoad.current) {
+      isInitialLoad.current = false;
+      const saved = scrollPositions.get(chatId);
+      if (saved != null) {
+        el.scrollTop = saved;
+      } else {
+        // First time opening this chat — jump to bottom instantly
+        el.scrollTop = el.scrollHeight;
+      }
+      prevMessageCount.current = chat.messages.length;
+      return;
+    }
+
+    // Auto-scroll to bottom only when new messages are added (user sent or streaming)
+    if (chat.messages.length > prevMessageCount.current || chat.streaming) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+    prevMessageCount.current = chat.messages.length;
+  }, [chatId, chat?.messages.length, chat?.streaming, chat?.streamBuffer]);
+
+  // Save scroll position on scroll and before unmount / chat switch
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const onScroll = () => {
+      scrollPositions.set(chatId, el.scrollTop);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      scrollPositions.set(chatId, el.scrollTop);
+    };
+  }, [chatId]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -135,6 +184,8 @@ export default function ChatView({ chatId }: ChatViewProps) {
     );
     unlisteners.push(onToken);
 
+    const isFirstExchange = chat.messages.length === 0;
+
     const onDone = await listen<{ chat_id: string; full_text: string }>(
       "stream-done",
       async (event) => {
@@ -154,6 +205,40 @@ export default function ChatView({ chatId }: ChatViewProps) {
           } catch (e) {
             console.error("Failed to persist assistant message:", e);
           }
+        }
+
+        // Auto-title after the first exchange
+        if (isFirstExchange && event.payload.full_text) {
+          const titleSettings = useSettingsStore.getState();
+          const ollamaBaseUrl = titleSettings.providers.ollama?.baseUrl || null;
+          invoke<string>("auto_title_chat", {
+            input: {
+              provider: chat.provider,
+              model: chat.model,
+              messages: [
+                { role: "user", content: text },
+                { role: "assistant", content: event.payload.full_text },
+              ],
+              base_url: chat.provider === "ollama" ? ollamaBaseUrl : null,
+            },
+          })
+            .then(async (title) => {
+              if (!title || title === "New Chat") return;
+              // Update UI immediately
+              renameChat(chatId, title);
+              const nodes = useWorkspaceStore.getState().nodes;
+              const node = nodes.find((n) => n.id === chatId);
+              if (node) upsertNode({ ...node, name: title });
+              // Persist to DB + file
+              try {
+                await invoke("rename_node", { workspaceRoot: rootPath, id: chatId, newName: title });
+              } catch (e) {
+                console.error("Failed to persist chat title:", e);
+              }
+            })
+            .catch((e) => {
+              console.error("Auto-title failed:", e);
+            });
         }
 
         // Clean up listeners
@@ -188,7 +273,9 @@ export default function ChatView({ chatId }: ChatViewProps) {
     unlisteners.push(onError);
 
     // Invoke the streaming command
-    const ollamaUrl = useSettingsStore.getState().providers.ollama?.baseUrl || null;
+    const settings = useSettingsStore.getState();
+    const ollamaUrl = settings.providers.ollama?.baseUrl || null;
+    const systemPrompt = settings.defaultSystemPrompt || null;
     try {
       await invoke("stream_chat", {
         input: {
@@ -196,7 +283,7 @@ export default function ChatView({ chatId }: ChatViewProps) {
           provider: chat.provider,
           model: chat.model,
           messages: apiMessages,
-          system_prompt: chat.system_prompt || null,
+          system_prompt: systemPrompt,
           temperature: chat.temperature,
           max_tokens: chat.max_tokens,
           base_url: chat.provider === "ollama" ? ollamaUrl : null,
@@ -245,7 +332,7 @@ export default function ChatView({ chatId }: ChatViewProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Message list */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
         {chat.messages.length === 0 && (
           <p className="text-xs text-fg-dim text-center mt-8">
             No messages yet. Start the conversation below.
@@ -271,6 +358,9 @@ export default function ChatView({ chatId }: ChatViewProps) {
         )}
         <div ref={bottomRef} />
       </div>
+
+      {/* Token counter */}
+      {chat.messages.length > 0 && <TokenCounter chat={chat} />}
 
       {/* Input area */}
       <div className="border-t border-border bg-surface relative">
@@ -354,5 +444,36 @@ const MessageBubble = memo(function MessageBubble({
 function StreamingCursor() {
   return (
     <span className="inline-block w-[6px] h-[14px] bg-fg-muted ml-0.5 align-text-bottom animate-pulse" />
+  );
+}
+
+function TokenCounter({ chat }: { chat: Chat }) {
+  const contextLimit = MODEL_CONTEXT_LIMITS[chat.model] ?? 128_000;
+
+  const totalTokens = chat.messages.reduce(
+    (sum, m) => sum + estimateTokens(m.content),
+    0
+  );
+
+  const pct = Math.min((totalTokens / contextLimit) * 100, 100);
+  const isWarning = pct >= 80;
+
+  const formatTokens = (n: number) =>
+    n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+
+  return (
+    <div className="px-4 py-1.5 flex items-center gap-2" title={`~${formatTokens(totalTokens)} / ${formatTokens(contextLimit)} tokens`}>
+      <div className="flex-1 h-1 bg-surface-raised rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-300 ${
+            isWarning ? "bg-fg-error" : "bg-accent"
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className={`text-[10px] tabular-nums shrink-0 ${isWarning ? "text-fg-error" : "text-fg-dim"}`}>
+        {formatTokens(totalTokens)} / {formatTokens(contextLimit)}
+      </span>
+    </div>
   );
 }

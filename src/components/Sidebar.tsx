@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { Plus, FolderPlus, Sparkles } from "lucide-react";
 import { useWorkspaceStore, type WorkspaceNode } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useTabStore } from "../stores/tabStore";
+import { usePaneStore } from "../stores/paneStore";
 import FileTree from "./FileTree";
 import { seedDemoChat } from "../seedDemo";
 
@@ -13,6 +15,8 @@ export default function Sidebar() {
   const { nodes, rootPath, upsertNode } = useWorkspaceStore();
   const defaultProvider = useSettingsStore((s) => s.defaultProvider);
   const defaultModel = useSettingsStore((s) => s.defaultModel);
+  const openTab = useTabStore((s) => s.openTab);
+  const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
   const [width, setWidth] = useState(208);
   const [creating, setCreating] = useState(false);
   const [bgCtxMenu, setBgCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -64,6 +68,9 @@ export default function Sidebar() {
               workspaceRoot: rootPath,
             });
       upsertNode(node);
+      if (nodeType === "chat") {
+        openTab(focusedPaneId, node.id);
+      }
     } catch (e) {
       console.error(`create ${nodeType} failed:`, e);
     } finally {
@@ -89,6 +96,7 @@ export default function Sidebar() {
         model: result.model,
         last_message: result.last_message,
       });
+      openTab(focusedPaneId, result.id);
     } catch (e) {
       console.error("create demo chat failed:", e);
     } finally {

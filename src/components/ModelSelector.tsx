@@ -112,7 +112,9 @@ export default function ModelSelector({ chatId }: ModelSelectorProps) {
         onClick={() => setOpen(!open)}
         className="flex items-center gap-1 py-0.5 text-[12px] text-fg-muted hover:text-fg transition-colors"
       >
-        <span className="truncate max-w-[220px]">{displayModel}</span>
+        <span className="text-fg-dim">{providerLabel}</span>
+        <span className="text-fg-dim">/</span>
+        <span className="truncate max-w-[180px]">{displayModel}</span>
         <ChevronDown size={13} />
       </button>
 

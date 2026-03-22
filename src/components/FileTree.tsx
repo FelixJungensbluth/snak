@@ -128,7 +128,7 @@ function FileTreeNode({
       return;
     }
     try {
-      await invoke("rename_node", { id: node.id, newName: trimmed });
+      await invoke("rename_node", { workspaceRoot: rootPath, id: node.id, newName: trimmed });
       upsertNode({ ...node, name: trimmed });
     } catch (e) {
       console.error("rename_node failed:", e);
