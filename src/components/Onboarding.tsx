@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, KeyRound, ArrowRight, SkipForward } from "lucide-react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useSkillStore } from "../stores/skillStore";
 import * as api from "../api/workspace";
 
 type Step = "pick" | "apikey";
@@ -56,6 +57,7 @@ export default function Onboarding() {
         setProviderConfig(provider, { hasApiKey: true });
       }
       setRootPath(pendingPath!);
+      useSkillStore.getState().loadSkills();
     } catch (e) {
       setError(String(e));
       setLoading(false);

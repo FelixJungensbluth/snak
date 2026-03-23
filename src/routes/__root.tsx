@@ -4,7 +4,8 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import * as api from "../api/workspace";
 import { useUiStore } from "../stores/uiStore";
-import { useSettingsStore } from "../stores/settingsStore";
+import { useSettingsStore, applyFontSettings } from "../stores/settingsStore";
+import { useSkillStore } from "../stores/skillStore";
 import { useSessionPersist } from "../hooks/useSessionPersist";
 import { applyTheme } from "../themes";
 
@@ -25,9 +26,10 @@ function RootComponent() {
   // Session persistence (save/restore pane layout, tabs, scroll positions)
   useSessionPersist();
 
-  // Apply saved theme on mount
+  // Apply saved theme + font settings on mount
   useEffect(() => {
     applyTheme(useSettingsStore.getState().theme);
+    applyFontSettings();
   }, []);
 
   // Global keyboard shortcuts
@@ -36,8 +38,19 @@ function RootComponent() {
       const mod = e.metaKey || e.ctrlKey;
       const ui = useUiStore.getState();
 
-      // Cmd+P or Cmd+K — Chat finder (find files)
-      if (mod && (e.key === "p" || e.key === "k") && !e.shiftKey) {
+      // Cmd+K — Command palette
+      if (mod && e.key === "k" && !e.shiftKey) {
+        e.preventDefault();
+        if (ui.commandPaletteOpen) {
+          ui.closeCommandPalette();
+        } else {
+          ui.openCommandPalette();
+        }
+        return;
+      }
+
+      // Cmd+P — Chat finder (find files)
+      if (mod && e.key === "p" && !e.shiftKey) {
         e.preventDefault();
         if (ui.chatFinderOpen) {
           ui.closeChatFinder();
@@ -98,6 +111,7 @@ function RootComponent() {
           const nodes = await api.listNodes();
           setNodes(nodes);
           setRootPath(savedPath);
+          useSkillStore.getState().loadSkills();
           scheduleDeferredReindex(savedPath);
         }
       } catch (e) {

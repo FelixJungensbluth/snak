@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, FolderPlus, FilePlus2, Settings, FolderOpen, X } from "lucide-react";
+import { Plus, FolderPlus, FilePlus2, Settings, FolderOpen, X, Zap, ChevronRight, Trash2 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { useSkillStore } from "../stores/skillStore";
 import * as api from "../api/workspace";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useTabStore } from "../stores/tabStore";
@@ -68,6 +69,7 @@ export default function Sidebar() {
       const nodes = await api.listNodes();
       useWorkspaceStore.getState().setNodes(nodes);
       useWorkspaceStore.getState().setRootPath(path);
+      useSkillStore.getState().loadSkills();
       void api.reindexAllChats(path)
         .then(() => api.listNodes())
         .then((reindexedNodes) => {
@@ -253,6 +255,9 @@ export default function Sidebar() {
         )}
       </div>
 
+      {/* Skills section */}
+      <SkillsSection />
+
       {/* footer buttons */}
       <div className="border-t border-border px-2 py-1.5 relative">
         <button
@@ -353,6 +358,154 @@ export default function Sidebar() {
         </div>
       )}
     </aside>
+  );
+}
+
+function SkillsSection() {
+  const skills = useSkillStore((s) => s.skills);
+  const saveSkill = useSkillStore((s) => s.saveSkill);
+  const deleteSkill = useSkillStore((s) => s.deleteSkill);
+  const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const newNameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (creating) {
+      requestAnimationFrame(() => newNameRef.current?.focus());
+    }
+  }, [creating]);
+
+  function startEdit(name: string, content: string) {
+    setEditing(name);
+    setEditContent(content);
+  }
+
+  async function commitEdit() {
+    if (editing && editContent.trim()) {
+      await saveSkill(editing, editContent);
+    }
+    setEditing(null);
+    setEditContent("");
+  }
+
+  async function handleCreate() {
+    const name = newName.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    if (!name) {
+      setCreating(false);
+      setNewName("");
+      return;
+    }
+    await saveSkill(name, `Instructions for /${name} skill.\n\nDescribe what this skill should do.`);
+    setCreating(false);
+    setNewName("");
+    startEdit(name, `Instructions for /${name} skill.\n\nDescribe what this skill should do.`);
+  }
+
+  async function handleDelete(name: string) {
+    await deleteSkill(name);
+    if (editing === name) {
+      setEditing(null);
+      setEditContent("");
+    }
+  }
+
+  return (
+    <div className="border-t border-border">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-1 px-3 py-2 text-[10px] text-fg-dim/70 uppercase tracking-wider font-medium hover:text-fg-dim transition-colors"
+      >
+        <ChevronRight
+          size={10}
+          className={`transition-transform ${expanded ? "rotate-90" : ""}`}
+        />
+        <Zap size={10} />
+        <span>Skills</span>
+        <span className="ml-auto text-[9px] normal-case tracking-normal opacity-60">
+          {skills.length}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="pb-2">
+          {skills.map((skill) => (
+            <div key={skill.name} className="group/skill">
+              {editing === skill.name ? (
+                <div className="px-3 py-1">
+                  <div className="text-[11px] text-fg-muted font-medium mb-1">/{skill.name}</div>
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    className="w-full bg-bg border border-border rounded text-[11px] text-fg px-2 py-1.5 resize-none outline-none focus:border-accent min-h-[80px]"
+                    autoFocus
+                  />
+                  <div className="flex justify-end gap-1 mt-1">
+                    <button
+                      onClick={() => { setEditing(null); setEditContent(""); }}
+                      className="text-[10px] text-fg-dim hover:text-fg px-2 py-0.5 rounded transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={commitEdit}
+                      className="text-[10px] text-accent hover:text-accent-hover px-2 py-0.5 rounded transition-colors"
+                    >
+                      Save
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  className="w-full flex items-center gap-2 px-3 py-1 text-[11px] text-fg-muted hover:text-fg hover:bg-surface-hover/70 transition-colors"
+                  onClick={() => startEdit(skill.name, skill.content)}
+                  title={skill.content.slice(0, 100)}
+                >
+                  <Zap size={10} className="shrink-0 opacity-50" />
+                  <span className="truncate">/{skill.name}</span>
+                  <span className="ml-auto flex gap-0.5 opacity-0 group-hover/skill:opacity-100 transition-opacity">
+                    <span
+                      className="p-0.5 hover:text-fg-error"
+                      onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+                      onClick={(e) => { e.stopPropagation(); handleDelete(skill.name); }}
+                    >
+                      <Trash2 size={10} />
+                    </span>
+                  </span>
+                </button>
+              )}
+            </div>
+          ))}
+
+          {creating ? (
+            <div className="px-3 py-1">
+              <input
+                ref={newNameRef}
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCreate();
+                  if (e.key === "Escape") { setCreating(false); setNewName(""); }
+                }}
+                onBlur={handleCreate}
+                placeholder="skill-name"
+                className="w-full bg-bg border border-border rounded text-[11px] text-fg px-2 py-1 outline-none focus:border-accent"
+              />
+            </div>
+          ) : (
+            <button
+              onClick={() => setCreating(true)}
+              className="w-full flex items-center gap-2 px-3 py-1 text-[11px] text-fg-dim hover:text-fg hover:bg-surface-hover/70 transition-colors"
+            >
+              <Plus size={10} />
+              <span>New Skill</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

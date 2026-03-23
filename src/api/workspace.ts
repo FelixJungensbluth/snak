@@ -274,3 +274,47 @@ export function readFileText(filePath: string) {
 export function readFileBase64(filePath: string) {
   return invoke<[string, string]>("read_file_base64", { filePath });
 }
+
+// ── Skills ───────────────────────────────────────────────────────────────────
+
+export interface Skill {
+  name: string;
+  content: string;
+}
+
+export function listSkills() {
+  return invoke<Skill[]>("list_skills", {
+    workspaceRoot: getRootPath(),
+  });
+}
+
+export function saveSkill(name: string, content: string) {
+  return invoke("save_skill", {
+    workspaceRoot: getRootPath(),
+    name,
+    content,
+  });
+}
+
+export function deleteSkill(name: string) {
+  return invoke("delete_skill", {
+    workspaceRoot: getRootPath(),
+    name,
+  });
+}
+
+// ── ArXiv ────────────────────────────────────────────────────────────────────
+
+export function importArxiv(arxivUrl: string, parentId: string | null = null) {
+  return invoke<WorkspaceNode>("import_arxiv", {
+    workspaceRoot: getRootPath(),
+    parentId,
+    arxivUrl,
+  });
+}
+
+export function ensureDefaultSkills() {
+  return invoke("ensure_default_skills", {
+    workspaceRoot: getRootPath(),
+  });
+}

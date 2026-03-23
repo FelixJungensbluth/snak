@@ -1,10 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Send, Square, Paperclip, X, FileText, FileCode, Bot, User } from "lucide-react";
+import { Send, Square, Paperclip, X, FileText, FileCode, Bot, User, Search, Zap } from "lucide-react";
 import { type Chat, type Message, type Attachment } from "../stores/chatStore";
 import { useChatDraftStore } from "../stores/chatDraftStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useUiStore } from "../stores/uiStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { useSkillStore } from "../stores/skillStore";
+import { useTabStore } from "../stores/tabStore";
+import { usePaneStore } from "../stores/paneStore";
 import { useChatEngine } from "../hooks/useChatEngine";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -56,6 +59,7 @@ export default function ChatView({ chatId }: ChatViewProps) {
   const scrollToMessageId = useUiStore((s) => s.scrollToMessageId);
   const setScrollToMessageId = useUiStore((s) => s.setScrollToMessageId);
   const fileNodes = useWorkspaceStore((s) => s.index.fileNodes);
+  const skills = useSkillStore((s) => s.skills);
 
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -65,11 +69,21 @@ export default function ChatView({ chatId }: ChatViewProps) {
     end: number;
     query: string;
   } | null>(null);
+  const [skillIndex, setSkillIndex] = useState(0);
+  const [skillRange, setSkillRange] = useState<{
+    start: number;
+    end: number;
+    query: string;
+  } | null>(null);
+  // Track when selectors are explicitly dismissed so onKeyUp doesn't re-open them
+  const mentionDismissedRef = useRef(false);
+  const skillDismissedRef = useRef(false);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
   const isInitialLoad = useRef(true);
   const prevMessageCount = useRef(0);
 
@@ -146,12 +160,39 @@ export default function ChatView({ chatId }: ChatViewProps) {
 
   // ── Attachment handling ──────────────────────────────────────────────────
 
-  const updateMentionState = useCallback((value: string, cursor?: number | null) => {
+  const updateMentionState = useCallback((value: string, cursor?: number | null, fromChange = false) => {
     const textarea = inputRef.current;
     const nextCursor = cursor ?? textarea?.selectionStart ?? value.length;
-    const activeMention = getActiveMentionQuery(value, nextCursor);
-    setMentionRange(activeMention);
-    setMentionIndex(0);
+
+    // Only update mention state if not explicitly dismissed, or if input changed
+    if (mentionDismissedRef.current && !fromChange) {
+      // Stay dismissed until input changes
+    } else {
+      if (fromChange) mentionDismissedRef.current = false;
+      const activeMention = getActiveMentionQuery(value, nextCursor);
+      setMentionRange(activeMention);
+      if (fromChange) setMentionIndex(0);
+    }
+
+    // Detect /skill command at the start of input
+    if (skillDismissedRef.current && !fromChange) {
+      // Stay dismissed until input changes
+    } else {
+      if (fromChange) skillDismissedRef.current = false;
+      const skillMatch = value.match(/^\/(\S*)$/);
+      if (!skillMatch) {
+        const prefixMatch = value.match(/^\/(\S*)/);
+        if (prefixMatch && nextCursor <= prefixMatch[0].length) {
+          setSkillRange({ start: 0, end: prefixMatch[0].length, query: prefixMatch[1] });
+          if (fromChange) setSkillIndex(0);
+        } else {
+          setSkillRange(null);
+        }
+      } else {
+        setSkillRange({ start: 0, end: skillMatch[0].length, query: skillMatch[1] });
+        if (fromChange) setSkillIndex(0);
+      }
+    }
   }, []);
 
   const mentionSuggestions = useMemo(() => {
@@ -160,8 +201,16 @@ export default function ChatView({ chatId }: ChatViewProps) {
     const filtered = query
       ? fileNodes.filter((node) => node.name.toLowerCase().includes(query))
       : fileNodes;
-    return filtered.slice(0, 8);
+    return filtered.slice(0, 20);
   }, [fileNodes, mentionRange]);
+
+  const skillSuggestions = useMemo(() => {
+    if (!skillRange) return [];
+    const query = skillRange.query.trim().toLowerCase();
+    return query
+      ? skills.filter((s) => s.name.toLowerCase().includes(query))
+      : skills;
+  }, [skills, skillRange]);
 
   const addFiles = useCallback(async (paths: string[]) => {
     const newAttachments: PendingAttachment[] = [];
@@ -248,48 +297,101 @@ export default function ChatView({ chatId }: ChatViewProps) {
       path: a.path,
       name: a.name,
     }));
+
+    // Extract /skill command and prepend skill instructions
+    let finalText = text;
+    const skillMatch = text.match(/^\/(\S+)\s*/);
+    if (skillMatch) {
+      const skillName = skillMatch[1];
+      const skill = skills.find((s) => s.name === skillName);
+      if (skill) {
+        const userText = text.slice(skillMatch[0].length);
+        finalText = `[Skill: ${skill.name}]\n${skill.content}\n\n${userText}`;
+      }
+    }
+
     clearDraft(chatId);
     setPendingAttachments([]);
-    sendMessage(text, attachments);
+    sendMessage(finalText, attachments);
     setMentionRange(null);
     setMentionIndex(0);
-  }, [chatId, clearDraft, input, pendingAttachments, sendMessage]);
+    setSkillRange(null);
+    setSkillIndex(0);
+  }, [chatId, clearDraft, input, pendingAttachments, sendMessage, skills]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (mentionSuggestions.length > 0 && mentionRange) {
+    // Skill autocomplete
+    if (skillRange && skillSuggestions.length > 0) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSkillRange(null);
+        skillDismissedRef.current = true;
+        return;
+      }
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
+        setSkillIndex((prev) => (prev + 1) % skillSuggestions.length);
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setMentionIndex((prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+        setSkillIndex((prev) => (prev - 1 + skillSuggestions.length) % skillSuggestions.length);
         return;
       }
-      if (e.key === "Enter" && !e.shiftKey) {
+      if ((e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))) {
         e.preventDefault();
-        const selected = mentionSuggestions[mentionIndex];
+        const selected = skillSuggestions[skillIndex];
         if (selected) {
-          const { nextValue, nextCursor } = replaceMentionAtRange(
-            input,
-            mentionRange.start,
-            mentionRange.end,
-            selected.name,
-          );
+          const nextValue = `/${selected.name} `;
           setDraft(chatId, nextValue);
-          setMentionRange(null);
+          setSkillRange(null);
           requestAnimationFrame(() => {
             inputRef.current?.focus();
-            inputRef.current?.setSelectionRange(nextCursor, nextCursor);
+            inputRef.current?.setSelectionRange(nextValue.length, nextValue.length);
           });
         }
         return;
       }
+    }
+
+    // Mention autocomplete
+    if (mentionRange) {
       if (e.key === "Escape") {
         e.preventDefault();
         setMentionRange(null);
+        mentionDismissedRef.current = true;
         return;
+      }
+      if (mentionSuggestions.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setMentionIndex((prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+          return;
+        }
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          const selected = mentionSuggestions[mentionIndex];
+          if (selected) {
+            const { nextValue, nextCursor } = replaceMentionAtRange(
+              input,
+              mentionRange.start,
+              mentionRange.end,
+              selected.name,
+            );
+            setDraft(chatId, nextValue);
+            setMentionRange(null);
+            requestAnimationFrame(() => {
+              inputRef.current?.focus();
+              inputRef.current?.setSelectionRange(nextCursor, nextCursor);
+            });
+          }
+          return;
+        }
       }
     }
 
@@ -355,7 +457,7 @@ export default function ChatView({ chatId }: ChatViewProps) {
 
       {/* Input area */}
       <div
-        className={`border-t border-border bg-surface relative ${dragOver ? "ring-2 ring-accent ring-inset" : ""}`}
+        className={`border-t border-border bg-surface ${dragOver ? "ring-2 ring-accent ring-inset" : ""}`}
       >
         {dragOver && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-surface/80 pointer-events-none">
@@ -376,36 +478,91 @@ export default function ChatView({ chatId }: ChatViewProps) {
           </div>
         )}
 
-        {mentionSuggestions.length > 0 && mentionRange && (
-          <div className="mx-3 mt-2 overflow-hidden rounded-lg border border-border bg-surface-raised shadow-lg">
-            {mentionSuggestions.map((node, index) => (
-              <button
-                key={node.id}
-                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] transition-colors ${
-                  index === mentionIndex ? "bg-accent-selection text-fg" : "text-fg-muted hover:bg-surface-hover"
-                }`}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  const { nextValue, nextCursor } = replaceMentionAtRange(
-                    input,
-                    mentionRange.start,
-                    mentionRange.end,
-                    node.name,
-                  );
-                  setDraft(chatId, nextValue);
-                  setMentionRange(null);
-                  requestAnimationFrame(() => {
-                    inputRef.current?.focus();
-                    inputRef.current?.setSelectionRange(nextCursor, nextCursor);
-                  });
-                }}
-              >
-                <FileText size={12} className="shrink-0" />
-                <span className="truncate">{node.name}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="relative">
+          {skillRange && skillSuggestions.length > 0 && (
+            <div className="absolute bottom-full left-0 right-0 mx-3 mb-1 max-h-[240px] flex flex-col overflow-hidden rounded-lg border border-border bg-surface-raised shadow-lg z-50">
+              <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
+                <Zap size={12} className="text-fg-muted shrink-0" />
+                <span className="text-[11px] text-fg-muted truncate">
+                  {skillRange.query ? `/${skillRange.query}` : "Select a skill…"}
+                </span>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {skillSuggestions.map((skill, index) => (
+                  <button
+                    key={skill.name}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors ${
+                      index === skillIndex ? "bg-accent-selection text-fg" : "text-fg-muted hover:bg-surface-hover"
+                    }`}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      const nextValue = `/${skill.name} `;
+                      setDraft(chatId, nextValue);
+                      setSkillRange(null);
+                      requestAnimationFrame(() => {
+                        inputRef.current?.focus();
+                        inputRef.current?.setSelectionRange(nextValue.length, nextValue.length);
+                      });
+                    }}
+                  >
+                    <Zap size={12} className="shrink-0" />
+                    <span className="truncate font-medium">/{skill.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {mentionRange && (
+            <div className="absolute bottom-full left-0 right-0 mx-3 mb-1 max-h-[240px] flex flex-col overflow-hidden rounded-lg border border-border bg-surface-raised shadow-lg z-50">
+              <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
+                <Search size={12} className="text-fg-muted shrink-0" />
+                <span className="text-[11px] text-fg-muted truncate">
+                  {mentionRange.query ? mentionRange.query : "Search files…"}
+                </span>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {mentionSuggestions.length > 0 ? (
+                  mentionSuggestions.map((node, index) => (
+                    <button
+                      key={node.id}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors ${
+                        index === mentionIndex ? "bg-accent-selection text-fg" : "text-fg-muted hover:bg-surface-hover"
+                      }`}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        const { nextValue, nextCursor } = replaceMentionAtRange(
+                          input,
+                          mentionRange.start,
+                          mentionRange.end,
+                          node.name,
+                        );
+                        setDraft(chatId, nextValue);
+                        setMentionRange(null);
+                        requestAnimationFrame(() => {
+                          inputRef.current?.focus();
+                          inputRef.current?.setSelectionRange(nextCursor, nextCursor);
+                        });
+                      }}
+                    >
+                      <FileText size={12} className="shrink-0" />
+                      <span className="truncate font-medium">{node.name}</span>
+                      {node.file_path && (
+                        <span className="ml-auto text-[10px] text-fg-dim shrink-0 truncate max-w-[50%]">
+                          {node.file_path.split("/").slice(0, -1).join("/")}
+                        </span>
+                      )}
+                    </button>
+                  ))
+                ) : (
+                  <div className="px-3 py-3 text-center text-[11px] text-fg-dim">
+                    No files found
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="flex items-end">
           <button
@@ -416,21 +573,40 @@ export default function ChatView({ chatId }: ChatViewProps) {
           >
             <Paperclip size={14} />
           </button>
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => {
-              setDraft(chatId, e.target.value);
-              updateMentionState(e.target.value, e.target.selectionStart);
-            }}
-            onKeyDown={handleKeyDown}
-            onClick={() => updateMentionState(input)}
-            onKeyUp={() => updateMentionState(input)}
-            placeholder="Type a message…"
-            rows={1}
-            disabled={chat.streaming}
-            className="flex-1 resize-none bg-transparent text-fg text-xs px-1 py-3 outline-none min-h-[80px] max-h-[200px] disabled:opacity-50"
-          />
+          <div className="flex-1 relative min-h-[80px] max-h-[200px]">
+            {/* Backdrop: renders styled mentions behind the transparent textarea text */}
+            <div
+              ref={backdropRef}
+              aria-hidden
+              className="absolute inset-0 px-1 py-3 text-xs whitespace-pre-wrap break-words overflow-hidden pointer-events-none"
+              style={{ wordBreak: "break-word" }}
+            >
+              {input ? (
+                <InputBackdrop content={input} />
+              ) : (
+                <span className="text-fg-muted">Type a message…</span>
+              )}
+            </div>
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => {
+                setDraft(chatId, e.target.value);
+                updateMentionState(e.target.value, e.target.selectionStart, true);
+              }}
+              onKeyDown={handleKeyDown}
+              onClick={() => updateMentionState(input)}
+              onScroll={() => {
+                if (backdropRef.current && inputRef.current) {
+                  backdropRef.current.scrollTop = inputRef.current.scrollTop;
+                }
+              }}
+              rows={1}
+              disabled={chat.streaming}
+              className="relative w-full h-full resize-none bg-transparent text-transparent text-xs px-1 py-3 outline-none min-h-[80px] max-h-[200px] disabled:opacity-50"
+              style={{ caretColor: "var(--color-fg, #fff)" }}
+            />
+          </div>
           {chat.streaming ? (
             <button
               onClick={abort}
@@ -493,9 +669,98 @@ function AttachmentChip({ attachment, onRemove }: { attachment: PendingAttachmen
   );
 }
 
+/** Renders input text with @[filename] mentions and /skill prefixes styled.
+ *  Characters are 1:1 with the textarea so the overlay aligns perfectly. */
+function InputBackdrop({ content }: { content: string }) {
+  if (!content) return null;
+
+  // Check for /skill prefix at start
+  const skillPrefixMatch = content.match(/^\/\S+/);
+  let textToRender = content;
+  const parts: React.ReactNode[] = [];
+  let key = 0;
+
+  if (skillPrefixMatch) {
+    parts.push(
+      <span key={key++} className="text-accent font-medium">
+        {skillPrefixMatch[0]}
+      </span>,
+    );
+    textToRender = content.slice(skillPrefixMatch[0].length);
+  }
+
+  // Process @mentions in remaining text
+  const pattern = /@(?:\[([^\]]+)\]|\{([^}]+)\})/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null = null;
+  while ((match = pattern.exec(textToRender)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(<span key={key++} className="text-fg">{textToRender.slice(lastIndex, match.index)}</span>);
+    }
+    parts.push(
+      <span key={key++} className="text-accent-hover underline decoration-accent-hover/40">
+        {match[0]}
+      </span>,
+    );
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < textToRender.length) {
+    parts.push(<span key={key++} className="text-fg">{textToRender.slice(lastIndex)}</span>);
+  }
+  return <>{parts}</>;
+}
+
 /** Strip markdown image references (e.g. `![name](.snak/attachments/...)`) from content */
 function stripImageMarkdown(content: string): string {
   return content.replace(/\n*!\[[^\]]*\]\([^)]*\)/g, "").trim();
+}
+
+/** Renders text with clickable @{filename} mentions that open files in tabs */
+function MentionText({ content }: { content: string }) {
+  const fileNodes = useWorkspaceStore((s) => s.index.fileNodes);
+  const openTab = useTabStore((s) => s.openTab);
+  const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
+
+  const parts = useMemo(() => {
+    const result: { text: string; mention?: string; nodeId?: string }[] = [];
+    const pattern = /@(?:\[([^\]]+)\]|\{([^}]+)\})/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null = null;
+    while ((match = pattern.exec(content)) !== null) {
+      if (match.index > lastIndex) {
+        result.push({ text: content.slice(lastIndex, match.index) });
+      }
+      const name = (match[1] ?? match[2])?.trim();
+      const node = name ? fileNodes.find((n) => n.name === name) : undefined;
+      result.push({ text: match[0], mention: name, nodeId: node?.id });
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < content.length) {
+      result.push({ text: content.slice(lastIndex) });
+    }
+    return result;
+  }, [content, fileNodes]);
+
+  return (
+    <span className="whitespace-pre-wrap">
+      {parts.map((part, i) =>
+        part.mention ? (
+          <button
+            key={i}
+            className="inline text-accent-hover underline decoration-accent-hover/40 hover:decoration-accent-hover cursor-pointer bg-transparent border-none p-0 font-inherit text-inherit"
+            onClick={() => {
+              if (part.nodeId) openTab(focusedPaneId, part.nodeId);
+            }}
+            title={part.nodeId ? `Open ${part.mention}` : `${part.mention} (not found)`}
+          >
+            @{part.mention}
+          </button>
+        ) : (
+          <span key={i}>{part.text}</span>
+        ),
+      )}
+    </span>
+  );
 }
 
 /** Renders an image attachment by loading it from disk via readFileBase64 */
@@ -547,7 +812,7 @@ const MessageBubble = memo(function MessageBubble({
             <AttachmentImage key={`${att.path}-${i}`} attachment={att} />
           ))}
           <div className="bg-accent/90 text-fg px-3.5 py-2.5 rounded-2xl rounded-br-sm text-[13px] leading-relaxed">
-            {displayContent && <span className="whitespace-pre-wrap">{displayContent}</span>}
+            {displayContent && <MentionText content={displayContent} />}
           </div>
         </div>
         <div className="w-6 h-6 rounded-full bg-accent/20 flex items-center justify-center shrink-0 mt-0.5">

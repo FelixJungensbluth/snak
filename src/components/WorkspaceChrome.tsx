@@ -7,6 +7,7 @@ import Sidebar from "./Sidebar";
 const SettingsPanel = lazy(() => import("./SettingsPanel"));
 const ChatFinderOverlay = lazy(() => import("./SearchOverlay"));
 const ContentSearchOverlay = lazy(() => import("./ContentSearch"));
+const CommandPalette = lazy(() => import("./CommandPalette"));
 
 export default function WorkspaceChrome() {
   const settingsOpen = useUiStore((s) => s.settingsOpen);
@@ -23,6 +24,7 @@ export default function WorkspaceChrome() {
         <Suspense fallback={null}>
           <ChatFinderOverlay />
           <ContentSearchOverlay />
+          <CommandPalette />
         </Suspense>
       </div>
     </TabDndProvider>

@@ -75,17 +75,20 @@ export function getMentionAttachmentType(
 }
 
 export function formatFileMention(name: string): string {
-  return `@{${name}}`;
+  return `@[${name}]`;
 }
 
+/** Extract mentioned filenames from both @[name] (new) and @{name} (legacy) formats */
 export function extractMentionedFileNames(content: string): string[] {
   const names = new Set<string>();
-  const pattern = /@\{([^}]+)\}/g;
+  const patterns = [/@\[([^\]]+)\]/g, /@\{([^}]+)\}/g];
 
-  let match: RegExpExecArray | null = null;
-  while ((match = pattern.exec(content)) !== null) {
-    const name = match[1]?.trim();
-    if (name) names.add(name);
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null = null;
+    while ((match = pattern.exec(content)) !== null) {
+      const name = match[1]?.trim();
+      if (name) names.add(name);
+    }
   }
 
   return [...names];
@@ -103,6 +106,18 @@ export function getActiveMentionQuery(
   if (prevChar && !/\s/.test(prevChar)) return null;
 
   const segment = beforeCursor.slice(atIndex);
+
+  // @[name] bracket format
+  if (segment.startsWith("@[")) {
+    if (segment.includes("]")) return null;
+    return {
+      start: atIndex,
+      end: cursor,
+      query: segment.slice(2),
+    };
+  }
+
+  // Legacy @{name} bracket format — still supported
   if (segment.startsWith("@{")) {
     if (segment.includes("}")) return null;
     return {
@@ -112,12 +127,15 @@ export function getActiveMentionQuery(
     };
   }
 
-  if (/\s/.test(segment)) return null;
+  // New @name format — trigger on @ followed by non-whitespace (or just @)
+  const afterAt = segment.slice(1);
+  // If there's a space after some text, the mention is complete — don't trigger
+  if (afterAt.includes(" ")) return null;
 
   return {
     start: atIndex,
     end: cursor,
-    query: segment.slice(1),
+    query: afterAt,
   };
 }
 
@@ -128,7 +146,12 @@ export function replaceMentionAtRange(
   fileName: string,
 ): { nextValue: string; nextCursor: number } {
   const mention = `${formatFileMention(fileName)} `;
-  const nextValue = `${content.slice(0, start)}${mention}${content.slice(end)}`;
+  // If the text after cursor has a closing bracket from legacy format, skip it
+  let adjustedEnd = end;
+  if (content[end] === "}" || content[end] === "]") {
+    adjustedEnd = end + 1;
+  }
+  const nextValue = `${content.slice(0, start)}${mention}${content.slice(adjustedEnd)}`;
   return {
     nextValue,
     nextCursor: start + mention.length,

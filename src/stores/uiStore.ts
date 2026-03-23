@@ -16,6 +16,11 @@ interface UiState {
   openContentSearch: () => void;
   closeContentSearch: () => void;
 
+  /** Command palette overlay (Cmd+K) */
+  commandPaletteOpen: boolean;
+  openCommandPalette: () => void;
+  closeCommandPalette: () => void;
+
   /** Monotonically increasing counter — bumped on every overlay open so
    *  components can key on it to fully remount with fresh state. */
   overlayGeneration: number;
@@ -48,9 +53,20 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({
       contentSearchOpen: true,
       chatFinderOpen: false,
+      commandPaletteOpen: false,
       overlayGeneration: get().overlayGeneration + 1,
     }),
   closeContentSearch: () => set({ contentSearchOpen: false }),
+
+  commandPaletteOpen: false,
+  openCommandPalette: () =>
+    set({
+      commandPaletteOpen: true,
+      chatFinderOpen: false,
+      contentSearchOpen: false,
+      overlayGeneration: get().overlayGeneration + 1,
+    }),
+  closeCommandPalette: () => set({ commandPaletteOpen: false }),
 
   overlayGeneration: 0,
 

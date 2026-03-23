@@ -10,7 +10,7 @@ import {
   useState,
   type RefObject,
 } from "react";
-import { Bot, FileText, Loader2 } from "lucide-react";
+import { Bot, FileText, Loader2, Maximize2, ZoomIn, ZoomOut } from "lucide-react";
 import * as api from "../api/workspace";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -21,6 +21,7 @@ import { getFileViewKind, formatFileMention } from "../utils/fileNodes";
 import MarkdownRenderer from "./MarkdownRenderer";
 
 const PdfViewer = lazy(() => import("./PdfViewer"));
+import { getCachedIntrinsicWidth, stepZoom } from "./PdfViewer";
 const PDF_FALLBACK_SRC_CACHE = new Map<string, string>();
 
 interface FileViewerProps {
@@ -72,6 +73,14 @@ export default function FileViewer({ nodeId }: FileViewerProps) {
   const [textContent, setTextContent] = useState<string | null>(null);
   const [fileSrc, setFileSrc] = useState<string | null>(null);
   const [pdfFallbackSrc, setPdfFallbackSrc] = useState<string | null>(null);
+
+  // PDF zoom state — default to fit-to-width (null) so the PDF always fills the panel
+  const [pdfScale, setPdfScale] = useState<number | null>(null);
+  const [pdfIntrinsicWidth, setPdfIntrinsicWidth] = useState<number | null>(() => {
+    if (!node?.file_path || !rootPath) return null;
+    const src = convertFileSrc(`${rootPath}/${node.file_path}`);
+    return getCachedIntrinsicWidth(src);
+  });
 
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
@@ -183,6 +192,46 @@ export default function FileViewer({ nodeId }: FileViewerProps) {
     }
   };
 
+  const handlePdfIntrinsicWidth = useCallback((width: number) => {
+    setPdfIntrinsicWidth(width);
+  }, []);
+
+  const handlePdfScaleChange = useCallback((scale: number | null) => {
+    setPdfScale(scale);
+  }, []);
+
+  // Compute display zoom percentage
+  const zoomPercent = useMemo(() => {
+    if (fileKind !== "pdf") return null;
+    if (pdfScale !== null) return Math.round(pdfScale * 100);
+    // In fit-to-width mode, estimate from container vs intrinsic
+    if (pdfIntrinsicWidth && pdfIntrinsicWidth > 0 && containerRef.current) {
+      const containerWidth = containerRef.current.clientWidth;
+      return Math.round((containerWidth / pdfIntrinsicWidth) * 100);
+    }
+    return null;
+  }, [fileKind, pdfScale, pdfIntrinsicWidth]);
+
+  const handleZoomIn = useCallback(() => {
+    const currentScale = pdfScale ?? (pdfIntrinsicWidth && containerRef.current
+      ? containerRef.current.clientWidth / pdfIntrinsicWidth
+      : 1);
+    const next = stepZoom(currentScale, "in");
+    if (next !== null) setPdfScale(next);
+  }, [pdfScale, pdfIntrinsicWidth]);
+
+  const handleZoomOut = useCallback(() => {
+    const currentScale = pdfScale ?? (pdfIntrinsicWidth && containerRef.current
+      ? containerRef.current.clientWidth / pdfIntrinsicWidth
+      : 1);
+    const next = stepZoom(currentScale, "out");
+    if (next !== null) setPdfScale(next);
+  }, [pdfScale, pdfIntrinsicWidth]);
+
+  const handleFitToWidth = useCallback(() => {
+    setPdfScale(null);
+  }, []);
+
   if (!node || node.type !== "file") {
     return (
       <div className="flex h-full items-center justify-center text-fg-dim text-xs">
@@ -193,20 +242,55 @@ export default function FileViewer({ nodeId }: FileViewerProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-border px-4 py-2.5">
-        <div className="flex items-center gap-2 text-sm text-fg">
-          <FileText size={14} className="text-fg-muted" />
-          <span className="truncate font-medium">{node.name}</span>
+      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+        <div>
+          <div className="flex items-center gap-2 text-sm text-fg">
+            <FileText size={14} className="text-fg-muted" />
+            <span className="truncate font-medium">{node.name}</span>
+          </div>
+          <div className="mt-0.5 text-[11px] text-fg-dim">
+            {[node.mime_type, formatFileSize(node.file_size)].filter(Boolean).join("  •  ")}
+          </div>
         </div>
-        <div className="mt-1 text-[11px] text-fg-dim">
-          {[node.mime_type, formatFileSize(node.file_size)].filter(Boolean).join("  •  ")}
-        </div>
+
+        {fileKind === "pdf" && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleZoomOut}
+              className="rounded p-1 text-fg-muted hover:bg-surface-hover hover:text-fg transition-colors"
+              title="Zoom out"
+            >
+              <ZoomOut size={14} />
+            </button>
+            <span className="min-w-[3rem] text-center text-[11px] tabular-nums text-fg-dim">
+              {zoomPercent != null ? `${zoomPercent}%` : "—"}
+            </span>
+            <button
+              onClick={handleZoomIn}
+              className="rounded p-1 text-fg-muted hover:bg-surface-hover hover:text-fg transition-colors"
+              title="Zoom in"
+            >
+              <ZoomIn size={14} />
+            </button>
+            <button
+              onClick={handleFitToWidth}
+              className={`ml-1 rounded p-1 transition-colors ${
+                pdfScale === null
+                  ? "bg-surface-hover text-fg"
+                  : "text-fg-muted hover:bg-surface-hover hover:text-fg"
+              }`}
+              title="Fit to width"
+            >
+              <Maximize2 size={14} />
+            </button>
+          </div>
+        )}
       </div>
 
-      <div ref={containerRef} className="relative flex-1 overflow-auto px-4 py-4">
+      <div ref={containerRef} className={`relative flex-1 overflow-auto ${fileKind === "pdf" ? "px-1 py-1" : "px-4 py-4"}`}>
         <SelectionToolbar containerRef={containerRef} viewerRef={viewerRef} onAskAi={handleAskAi} />
 
-        <div ref={viewerRef} className="mx-auto w-full max-w-[920px]">
+        <div ref={viewerRef} className={`mx-auto w-full ${fileKind !== "pdf" ? "max-w-[920px]" : ""}`}>
           {loading ? (
             <div className="flex h-full min-h-[240px] items-center justify-center gap-2 text-fg-dim">
               <Loader2 size={14} className="animate-spin" />
@@ -250,6 +334,9 @@ export default function FileViewer({ nodeId }: FileViewerProps) {
                   src={pdfSrc}
                   containerRef={containerRef}
                   onLoadError={handlePdfLoadError}
+                  scale={pdfScale}
+                  onScaleChange={handlePdfScaleChange}
+                  onIntrinsicWidthReady={handlePdfIntrinsicWidth}
                 />
               </Suspense>
             ) : null

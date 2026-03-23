@@ -5,6 +5,9 @@ import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import { Copy, Check } from "lucide-react";
+import { useWorkspaceStore } from "../stores/workspaceStore";
+import { useTabStore } from "../stores/tabStore";
+import { usePaneStore } from "../stores/paneStore";
 import "katex/dist/katex.min.css";
 import "highlight.js/styles/github-dark.min.css";
 
@@ -44,6 +47,52 @@ function extractText(node: unknown): string {
   return "";
 }
 
+const MENTION_PREFIX = "snak-mention://";
+
+/** Convert @[filename] and @{filename} to markdown links with a special protocol */
+function preprocessMentions(content: string): string {
+  return content
+    .replace(/@\[([^\]]+)\]/g, (_, name) => {
+      return `[@${name.trim()}](${MENTION_PREFIX}${encodeURIComponent(name.trim())})`;
+    })
+    .replace(/@\{([^}]+)\}/g, (_, name) => {
+      return `[@${name.trim()}](${MENTION_PREFIX}${encodeURIComponent(name.trim())})`;
+    });
+}
+
+function MentionLink({ href, children }: { href?: string; children?: React.ReactNode }) {
+  const fileNodes = useWorkspaceStore((s) => s.index.fileNodes);
+  const openTab = useTabStore((s) => s.openTab);
+  const focusedPaneId = usePaneStore((s) => s.focusedPaneId);
+
+  if (href?.startsWith(MENTION_PREFIX)) {
+    const name = decodeURIComponent(href.slice(MENTION_PREFIX.length));
+    const node = fileNodes.find((n) => n.name === name);
+    return (
+      <button
+        className="inline text-accent-hover underline decoration-accent-hover/40 hover:decoration-accent-hover cursor-pointer bg-transparent border-none p-0 font-inherit text-inherit"
+        onClick={() => {
+          if (node) openTab(focusedPaneId, node.id);
+        }}
+        title={node ? `Open ${name}` : `${name} (not found)`}
+      >
+        {children}
+      </button>
+    );
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-accent-hover underline"
+    >
+      {children}
+    </a>
+  );
+}
+
 // Stable components config — defined once, never recreated
 const MD_COMPONENTS = {
   pre({ children }: { children?: React.ReactNode }) {
@@ -72,18 +121,7 @@ const MD_COMPONENTS = {
       </code>
     );
   },
-  a({ href, children }: { href?: string; children?: React.ReactNode }) {
-    return (
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-accent-hover underline"
-      >
-        {children}
-      </a>
-    );
-  },
+  a: MentionLink,
   img({ src, alt }: { src?: string; alt?: string }) {
     return (
       <img
@@ -101,13 +139,14 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
 }: {
   content: string;
 }) {
+  const processed = preprocessMentions(content);
   return (
     <ReactMarkdown
       remarkPlugins={REMARK_PLUGINS}
       rehypePlugins={REHYPE_PLUGINS}
       components={MD_COMPONENTS}
     >
-      {content}
+      {processed}
     </ReactMarkdown>
   );
 });
